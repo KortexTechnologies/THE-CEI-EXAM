@@ -1,0 +1,48 @@
+name: Deploy Cloudflare edge
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "cloudflare-edge/**"
+      - ".github/workflows/deploy-cloudflare-edge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: theceiexam-production-edge
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Verify and deploy production Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cloudflare-edge
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify edge behaviour
+        run: node verify.mjs
+
+      - name: Require scoped Cloudflare token
+        shell: bash
+        run: test -n "$CLOUDFLARE_API_TOKEN"
+
+      - name: Deploy production Worker and routes
+        run: npx --yes wrangler@4.123.0 deploy --env production
