@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "theceiexam-edge",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-17",
+  "observability": {
+    "enabled": true
+  },
+  // Top-level (default) environment stays preview-only: a plain deploy can
+  // never attach production traffic.
+  "workers_dev": true,
+  "routes": [],
+  // Non-secret preview-only upstream origin. Omitted under env.production so
+  // Worker Route traffic proxies the original Request unchanged.
+  "vars": {
+    "ORIGIN_BASE_URL": "https://theceiexam.lovable.app"
+  },
+  "env": {
+    // Production route bindings live here only. Deploy with `--env production`.
+    "production": {
+      "name": "theceiexam-edge-production",
+      "workers_dev": false,
+      "vars": {},
+      "routes": [
+        { "pattern": "theceiexam.com/*", "zone_name": "theceiexam.com" },
+        { "pattern": "www.theceiexam.com/*", "zone_name": "theceiexam.com" }
+      ]
+    }
+  }
+}
+
