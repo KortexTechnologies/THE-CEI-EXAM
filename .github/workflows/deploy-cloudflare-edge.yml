@@ -26,7 +26,6 @@ jobs:
         working-directory: cloudflare-edge
     env:
       CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
     steps:
       - name: Check out release source
@@ -40,9 +39,26 @@ jobs:
       - name: Verify edge behaviour
         run: node verify.mjs
 
-      - name: Require scoped Cloudflare token
+      - name: Resolve an existing scoped Cloudflare token
+        env:
+          TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TOKEN_CF_ALIAS: ${{ secrets.CF_API_TOKEN }}
+          TOKEN_ALT_ALIAS: ${{ secrets.CLOUDFLARE_TOKEN }}
         shell: bash
-        run: test -n "$CLOUDFLARE_API_TOKEN"
+        run: |
+          if [ -n "$TOKEN_PRIMARY" ]; then
+            printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN_PRIMARY" >> "$GITHUB_ENV"
+            echo 'Using CLOUDFLARE_API_TOKEN secret'
+          elif [ -n "$TOKEN_CF_ALIAS" ]; then
+            printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN_CF_ALIAS" >> "$GITHUB_ENV"
+            echo 'Using CF_API_TOKEN secret'
+          elif [ -n "$TOKEN_ALT_ALIAS" ]; then
+            printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN_ALT_ALIAS" >> "$GITHUB_ENV"
+            echo 'Using CLOUDFLARE_TOKEN secret'
+          else
+            echo 'No supported Cloudflare token secret is configured' >&2
+            exit 1
+          fi
 
       - name: Deploy production Worker and routes
         run: npx --yes wrangler@4.123.0 deploy --env production
