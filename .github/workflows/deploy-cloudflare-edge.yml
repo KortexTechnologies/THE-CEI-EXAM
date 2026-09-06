@@ -1,6 +1,10 @@
-name: Deploy Cloudflare edge
+name: Verify and deploy Cloudflare edge
 
 on:
+  pull_request:
+    paths:
+      - "cloudflare-edge/**"
+      - ".github/workflows/deploy-cloudflare-edge.yml"
   push:
     branches:
       - main
@@ -13,22 +17,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: theceiexam-production-edge
+  group: theceiexam-edge-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Verify and deploy production Worker
+  verify:
+    name: Verify Cloudflare edge
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
         working-directory: cloudflare-edge
-    env:
-      CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
-
     steps:
-      - name: Check out release source
+      - name: Check out proposed source
         uses: actions/checkout@v4
 
       - name: Use Node.js 22
@@ -36,8 +37,31 @@ jobs:
         with:
           node-version: 22
 
+      - name: Build Worker from canonical TypeScript source
+        run: npx --yes esbuild@0.25.9 worker/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.mjs
+
       - name: Verify edge behaviour
         run: node verify.mjs
+
+  deploy:
+    name: Deploy production Worker
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cloudflare-edge
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
+    steps:
+      - name: Check out verified release source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Resolve an existing scoped Cloudflare token
         env:
