@@ -13,7 +13,12 @@ import {
   CANONICAL_ORIGIN,
   WWW_HOST,
   REDIRECT_STATUS,
+  DASHBOARD_CANONICAL_ORIGIN,
+  DASHBOARD_CANONICAL_HOST,
+  DASHBOARD_WWW_HOST,
+  DASHBOARD_REDIRECT_STATUS,
   isAssetLike,
+  isDashboardReachable,
   isEdgeNotFoundPath,
   isReachable,
   lookupRedirect,
@@ -47,19 +52,20 @@ const NOT_FOUND_HTML = `<!doctype html>
 </html>
 `;
 
-const notFound = (method: string): Response => {
+const notFound = (method: string, returnOrigin = CANONICAL_ORIGIN): Response => {
   const headers = new Headers({
     "content-type": "text/html; charset=utf-8",
     "x-robots-tag": "noindex,nofollow",
     "cache-control": "no-store",
   });
-  const body = method === "HEAD" ? null : NOT_FOUND_HTML;
+  const html = NOT_FOUND_HTML.replace(`${CANONICAL_ORIGIN}/`, `${returnOrigin}/`);
+  const body = method === "HEAD" ? null : html;
   return new Response(body, { status: 404, headers });
 };
 
-const redirect = (location: string): Response =>
+const redirect = (location: string, status = REDIRECT_STATUS): Response =>
   new Response(null, {
-    status: REDIRECT_STATUS,
+    status,
     headers: { location, "cache-control": "no-store" },
   });
 
@@ -114,8 +120,38 @@ export default {
   async fetch(request: Request, env?: EdgeEnv): Promise<Response> {
     const url = new URL(request.url);
 
-    // Canonical host: www -> apex only, preserving method, path and query. Any
-    // other hostname (workers.dev preview) is exercised, never redirected.
+    // Project B is evaluated before Project A so overlapping paths never pick
+    // up Project A redirects. The alias uses the explicitly required HTTP 301.
+    if (url.hostname === DASHBOARD_WWW_HOST) {
+      return redirect(
+        `${DASHBOARD_CANONICAL_ORIGIN}${url.pathname}${url.search}`,
+        DASHBOARD_REDIRECT_STATUS,
+      );
+    }
+
+    if (url.hostname === DASHBOARD_CANONICAL_HOST) {
+      const dashboardPath = normalisePath(url.pathname);
+
+      if (isDashboardReachable(dashboardPath)) {
+        const response = await fetch(upstreamRequest(request, env));
+        if (
+          isAssetLike(dashboardPath) &&
+          (response.headers.get("content-type") ?? "").includes("text/html")
+        ) {
+          return notFound(request.method, DASHBOARD_CANONICAL_ORIGIN);
+        }
+        return response;
+      }
+
+      if (isNavigation(request.method)) {
+        return notFound(request.method, DASHBOARD_CANONICAL_ORIGIN);
+      }
+
+      return fetch(upstreamRequest(request, env));
+    }
+
+    // Project A canonical host: www -> apex, preserving method, path and query.
+    // Any other hostname (workers.dev preview) is exercised, never redirected.
     if (url.hostname === WWW_HOST) {
       return redirect(`${CANONICAL_ORIGIN}${url.pathname}${url.search}`);
     }
