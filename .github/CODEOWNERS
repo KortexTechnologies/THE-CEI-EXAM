@@ -1,0 +1,8 @@
+# Default reviewer for release-control changes.
+* @KortexTechnologies
+
+# Critical release surfaces.
+/.github/ @KortexTechnologies
+/cloudflare-edge/ @KortexTechnologies
+/worker/ @KortexTechnologies
+/wrangler.jsonc @KortexTechnologies
