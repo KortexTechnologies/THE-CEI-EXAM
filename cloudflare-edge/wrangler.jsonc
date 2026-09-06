@@ -23,7 +23,9 @@
       "vars": {},
       "routes": [
         { "pattern": "theceiexam.com/*", "zone_name": "theceiexam.com" },
-        { "pattern": "www.theceiexam.com/*", "zone_name": "theceiexam.com" }
+        { "pattern": "www.theceiexam.com/*", "zone_name": "theceiexam.com" },
+        { "pattern": "dashboard.theceiexam.com/*", "zone_name": "theceiexam.com" },
+        { "pattern": "www.dashboard.theceiexam.com/*", "zone_name": "theceiexam.com" }
       ]
     }
   }
