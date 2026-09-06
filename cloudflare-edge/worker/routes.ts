@@ -292,3 +292,127 @@ export const isAssetLike = (pathname: string): boolean => {
   return isDynamicAssetPath(path) || /\.[a-z0-9]{2,5}$/i.test(path);
 };
 
+/**
+ * Project B dashboard host policy.
+ *
+ * The dashboard is a separate SPA behind the same zone. Its route registry is
+ * deliberately independent from Project A so similarly named paths (for
+ * example /mock-exams) can never inherit Project A redirects.
+ */
+export const DASHBOARD_CANONICAL_ORIGIN = "https://dashboard.theceiexam.com";
+export const DASHBOARD_CANONICAL_HOST = "dashboard.theceiexam.com";
+export const DASHBOARD_WWW_HOST = "www.dashboard.theceiexam.com";
+export const DASHBOARD_REDIRECT_STATUS = 301;
+
+export const DASHBOARD_REACHABLE_ROUTES: ReadonlyArray<string> = Object.freeze([
+  "/",
+  "/signin",
+  "/login",
+  "/signin-password",
+  "/access-status",
+  "/sso",
+  "/.lovable/oauth/consent",
+  "/sso-callback",
+  "/sso-status",
+  "/unsubscribe",
+  "/auth",
+  "/auth-sign-in",
+  "/signup",
+  "/auth-sign-up",
+  "/claim",
+  "/dashboard",
+  "/practice",
+  "/section-practice",
+  "/module-practice",
+  "/practise",
+  "/section-practise",
+  "/module-practise",
+  "/practice-set",
+  "/practice/pack",
+  "/practice-pack",
+  "/mock-exams",
+  "/mock-exam",
+  "/review",
+  "/review-requests",
+  "/progress",
+  "/performance",
+  "/activity",
+  "/programme",
+  "/material",
+  "/notes",
+  "/study-materials",
+  "/flashcards",
+  "/flashcard",
+  "/support",
+  "/contact-support",
+  "/account",
+  "/profile",
+  "/pass",
+  "/learning-wallet",
+  "/purchase-success",
+  "/purchase-status",
+  "/reviewer",
+  "/admin/sign-in",
+  "/admin",
+  "/admin/candidates",
+  "/admin/access-sync",
+  "/admin/content-review",
+  "/admin/support",
+  "/admin/review-requests",
+  "/admin/practitioner-review",
+  "/admin/material-access",
+  "/admin/practice-pack",
+  "/practice-pack/admin",
+  "/onboarding",
+  "/change-password",
+  "/reset-password",
+  "/code-of-conduct",
+  "/feedback",
+  "/terms-of-service",
+  "/terms",
+  "/privacy-policy",
+  "/privacy",
+  "/cookies",
+  "/cookie-policy",
+  "/refunds",
+  "/refund-policy",
+  "/Terms-of-Service",
+  "/Privacy-Policy",
+  "/variant-b",
+  "/platform-overview",
+  "/regulatory-frameworks",
+  "/scenario-simulation",
+  "/readiness-diagnostics",
+  "/error-analysis",
+  "/question-bank",
+  "/learning-analytics",
+  "/technology-architecture",
+  "/use-cases",
+  "/platform-metrics",
+  "/approach",
+  "/demo",
+  "/video",
+  "/Knowledge-diagnostic",
+  "/cei-diagnostic",
+  "/marketing-embed",
+  "/case-scenario",
+  "/module-focus",
+  "/practice/module-focus",
+]);
+
+export const DASHBOARD_REACHABLE_PATTERNS: ReadonlyArray<RegExp> = Object.freeze([
+  /^\/mock-exams\/[^/]+$/,
+  /^\/mock-exam\/[^/]+$/,
+  /^\/admin\/candidates\/[^/]+$/,
+  /^\/Knowledge-diagnostic\/.*$/,
+  /^\/cei-diagnostic\/.*$/,
+]);
+
+export const isDashboardReachable = (pathname: string): boolean => {
+  const path = normalisePath(pathname);
+  return (
+    DASHBOARD_REACHABLE_ROUTES.includes(path) ||
+    DASHBOARD_REACHABLE_PATTERNS.some((pattern) => pattern.test(path)) ||
+    isAssetLike(path)
+  );
+};
