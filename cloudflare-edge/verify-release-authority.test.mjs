@@ -34,6 +34,34 @@ const requiredGoReceipts = [
   { receiptType: "approval", phase: "go", subject: "singapore_legal" },
   { receiptType: "approval", phase: "go", subject: "engineering_security" },
 ];
+const localGoRequirementIds = [
+  "trust_policy_valid",
+  "peer_trust_policy_matches",
+  "trusted_release_issuers_configured",
+  ...["projectA", "projectB", "edge"].flatMap((role) => [
+    `${role}_repository_present`,
+    `${role}_authoritative_repository`,
+    `${role}_identity_stable_during_hashing`,
+    `${role}_working_tree_clean`,
+    `${role}_source_hash_present`,
+    `${role}_candidate_bound_production_build`,
+  ]),
+  "project_a_lockfile_hash_present",
+  "project_b_lockfile_hash_present",
+  "project_a_migration_head_present",
+  "project_b_migration_head_present",
+  "project_a_edge_function_hashes_present",
+  "project_b_edge_function_hashes_present",
+  "programme_schedule_file_hash_verified",
+  "product_contract_parity",
+  "legal_v2_2_copy_hashes_match",
+  "legal_effective_metadata_matches_candidate",
+  "complete_canonical_stripe_offer_matrix",
+  "cookiebot_expected_configuration_present",
+  "current_and_rollback_deployments_expected",
+  "observation_window_valid",
+  "intended_effective_timestamp_present",
+];
 
 function requirementId(requirement) {
   if (requirement.receiptType === "provider")
@@ -91,51 +119,59 @@ function makeFixture({
   };
   writeJson(paths.policy, policy);
 
+  const repositoryEnvelopeFor = (repositoryUrl, commitSha, seed) => ({
+    expectedRepositoryUrl: repositoryUrl,
+    repositoryUrl,
+    commitSha,
+    treeSha: seed.repeat(40),
+    sourceWorkingTreeSha256: seed.repeat(64),
+    lockfileAggregateSha256: seed.repeat(64),
+    buildSha256: seed.repeat(64),
+    buildArtifactSha256: seed.repeat(64),
+    buildMetadataSha256: seed.repeat(64),
+    buildConfigurationSha256: seed.repeat(64),
+  });
   const repositoryEnvelope = {
-    expectedRepositoryUrl: REPOSITORY_URL,
-    repositoryUrl: REPOSITORY_URL,
-    commitSha: candidateSha,
-    treeSha: TREE_SHA,
-    sourceWorkingTreeSha256: "1".repeat(64),
-    lockfileAggregateSha256: "2".repeat(64),
-    buildSha256: "3".repeat(64),
-    buildArtifactSha256: "4".repeat(64),
-    buildMetadataSha256: "5".repeat(64),
-    buildConfigurationSha256: "6".repeat(64),
+    projectA: repositoryEnvelopeFor(
+      "https://github.com/Kortex-Technologies-Private-Limited/theceiexam.git",
+      "a".repeat(40),
+      "a",
+    ),
+    projectB: repositoryEnvelopeFor(
+      "https://github.com/Kortex-Technologies-Private-Limited/dashboard-theceiexam.git",
+      "b".repeat(40),
+      "b",
+    ),
+    edge: {
+      ...repositoryEnvelopeFor(REPOSITORY_URL, candidateSha, "c"),
+      treeSha: TREE_SHA,
+    },
+  };
+  const database = { projectA: { migrations: {} }, projectB: { migrations: {} } };
+  const deploymentBaseline = {
+    projectA: {
+      currentDeploymentId: "a-current",
+      rollbackDeploymentId: "a-rollback",
+    },
+    projectB: {
+      currentDeploymentId: "b-current",
+      rollbackDeploymentId: "b-rollback",
+    },
+    edge: {
+      currentDeploymentId: "edge-current",
+      rollbackDeploymentId: "edge-rollback",
+    },
   };
   const candidateEnvelope = {
     schemaVersion: 1,
-    repositories: {
-      projectA: {
-        ...repositoryEnvelope,
-        repositoryUrl: "https://github.com/example/a.git",
-      },
-      projectB: {
-        ...repositoryEnvelope,
-        repositoryUrl: "https://github.com/example/b.git",
-      },
-      edge: repositoryEnvelope,
-    },
-    database: { projectA: {}, projectB: {} },
+    repositories: repositoryEnvelope,
+    database,
     programmeSchedule: { sha256: "7".repeat(64) },
     productContract: { semanticHash: "8".repeat(64) },
     legal: { wordingSha256: "9".repeat(64) },
     stripe: { accountId: "acct_fixture" },
     cookiebot: { configurationId: "cb-fixture" },
-    deploymentBaseline: {
-      projectA: {
-        currentDeploymentId: "a-current",
-        rollbackDeploymentId: "a-rollback",
-      },
-      projectB: {
-        currentDeploymentId: "b-current",
-        rollbackDeploymentId: "b-rollback",
-      },
-      edge: {
-        currentDeploymentId: "edge-current",
-        rollbackDeploymentId: "edge-rollback",
-      },
-    },
+    deploymentBaseline,
     intendedEffectiveAt: "2026-09-12T00:00:00.000Z",
     observationWindow: {
       startsAt: "2026-09-12T00:00:00.000Z",
@@ -178,12 +214,29 @@ function makeFixture({
         "en",
       ),
     );
+  const goReadinessRequirements = [
+    ...localGoRequirementIds.map((id) => ({ id, passed: true })),
+    ...requiredGoReceipts.map((requirement) => ({
+      id: requirementId(requirement),
+      passed: true,
+    })),
+  ];
+  const goReadinessPredicate = {
+    passes: goPasses,
+    blockers: goPasses ? [] : ["trust_policy_valid"],
+    requirements: goPasses
+      ? goReadinessRequirements
+      : goReadinessRequirements.map((requirement, index) =>
+          index === 0 ? { ...requirement, passed: false } : requirement,
+        ),
+  };
   const goReadinessSha256 = sha256(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       candidateFingerprint,
       requiredReceipts: requiredGoReceipts,
       acceptedRequiredReceipts,
+      goReadinessPredicate,
     }),
   );
   const receipt = {
@@ -225,43 +278,35 @@ function makeFixture({
     reference: receipt.reference,
     signatureVerified: true,
   };
-  const goReadinessRequirements = [
-    { id: "trust_policy_valid", passed: true },
-    ...requiredGoReceipts.map((requirement) => ({
-      id: requirementId(requirement),
-      passed: true,
-    })),
-  ];
-  const goReadinessPredicate = {
-    passes: goPasses,
-    blockers: goPasses ? [] : ["local_release_failed"],
-    requirements: goPasses
-      ? goReadinessRequirements
-      : goReadinessRequirements.map((requirement, index) =>
-          index === 0 ? { ...requirement, passed: false } : requirement,
-        ),
-  };
   const goPredicate = {
     passes: goPasses,
-    blockers: goPasses ? [] : ["local_release_failed"],
+    blockers: goPasses ? [] : ["trust_policy_valid"],
     requirements: [
       ...goReadinessPredicate.requirements,
       { id: "signed_action_time_release_authority_approval", passed: true },
     ],
   };
-  const repositories = {
-    projectA: {},
-    projectB: {},
-    edge: {
-      expectedRepositoryUrl: REPOSITORY_URL,
-      repositoryUrl: REPOSITORY_URL,
-      commitSha: candidateSha,
-      treeSha: TREE_SHA,
-      clean: true,
-      build: { metadataBoundToCandidate: true },
-    },
-  };
-  const database = { projectA: {}, projectB: {} };
+  const repositories = Object.fromEntries(
+    Object.entries(repositoryEnvelope).map(([role, envelope]) => [
+      role,
+      {
+        expectedRepositoryUrl: envelope.expectedRepositoryUrl,
+        repositoryUrl: envelope.repositoryUrl,
+        commitSha: envelope.commitSha,
+        treeSha: envelope.treeSha,
+        sourceWorkingTreeSha256: envelope.sourceWorkingTreeSha256,
+        clean: true,
+        lockfiles: { aggregateSha256: envelope.lockfileAggregateSha256 },
+        build: {
+          sha256: envelope.buildSha256,
+          artifactSha256: envelope.buildArtifactSha256,
+          metadataSha256: envelope.buildMetadataSha256,
+          configurationSha256: envelope.buildConfigurationSha256,
+          metadataBoundToCandidate: true,
+        },
+      },
+    ]),
+  );
   const releaseFacts = {
     programmeSchedule: candidateEnvelope.programmeSchedule,
     productContract: candidateEnvelope.productContract,
@@ -275,14 +320,20 @@ function makeFixture({
     projectA: {
       currentDeploymentId: "a-current",
       rollbackDeploymentId: "a-rollback",
+      candidateDeploymentId: null,
+      deployedCommitSha: null,
     },
     projectB: {
       currentDeploymentId: "b-current",
       rollbackDeploymentId: "b-rollback",
+      candidateDeploymentId: null,
+      deployedCommitSha: null,
     },
     edge: {
       currentDeploymentId: "edge-current",
       rollbackDeploymentId: "edge-rollback",
+      candidateDeploymentId: null,
+      deployedCommitSha: null,
     },
   };
   const signedReceipts = {
@@ -329,7 +380,15 @@ function makeFixture({
       trustPolicySha256: candidateEnvelope.trustPolicySha256,
     },
     ...deterministicPayload,
-    policy: { goRequiresSignedActionTimeAuthority: true },
+    policy: {
+      unsignedEnvironmentAssertionsAreNeverAuthority: true,
+      evidenceBytesAndDetachedSignaturesRequired: true,
+      providerReadbackReceiptsRequired: true,
+      readyStatusesDoNotAuthoriseRelease: true,
+      goRequiresSignedActionTimeAuthority: true,
+      liveRequiresSignedPostObservationAuthority: true,
+      secretsRawLearnerIdentifiersAndPaymentDataForbidden: true,
+    },
   };
   writeJson(paths.manifest, manifest);
 
@@ -434,6 +493,65 @@ test("rejects a dispatched candidate that differs from the running revision", ()
 test("rejects a manifest whose edge candidate differs from the running revision", () => {
   const fixture = makeFixture({ candidateSha: "e".repeat(40) });
   expectCode(fixture, "release_manifest_edge_candidate_mismatch");
+});
+
+test("rejects a rewritten readiness predicate even when the manifest self-hash is refreshed", () => {
+  expectCode(
+    makeFixture(),
+    "release_manifest_go_readiness_derivation_invalid",
+    (fixture) => {
+      fixture.manifest.goReadinessPredicate.requirements.splice(3, 1);
+      fixture.manifest.goPredicate.requirements = [
+        ...fixture.manifest.goReadinessPredicate.requirements,
+        { id: "signed_action_time_release_authority_approval", passed: true },
+      ];
+      fixture.rewriteManifest();
+    },
+  );
+});
+
+test("rejects duplicate or additional accepted receipts", () => {
+  expectCode(makeFixture(), "release_manifest_signed_receipt_set_invalid", (fixture) => {
+    fixture.manifest.signedReceipts.accepted.push({
+      ...fixture.manifest.signedReceipts.accepted[0],
+      id: "duplicate-local-release",
+    });
+    fixture.rewriteManifest();
+  });
+});
+
+test("rejects a top-level Project A identity that differs from the signed candidate envelope", () => {
+  expectCode(
+    makeFixture(),
+    "release_manifest_projectA_repository_inconsistent",
+    (fixture) => {
+      fixture.manifest.repositories.projectA.commitSha = "d".repeat(40);
+      fixture.rewriteManifest();
+    },
+  );
+});
+
+test("rejects release facts or deployment baselines rewritten outside the signed envelope", () => {
+  expectCode(
+    makeFixture(),
+    "release_manifest_candidate_duplicates_inconsistent",
+    (fixture) => {
+      fixture.manifest.releaseFacts.cookiebot = {
+        ...fixture.manifest.releaseFacts.cookiebot,
+        configurationId: "rewritten",
+      };
+      fixture.rewriteManifest();
+    },
+  );
+  expectCode(
+    makeFixture(),
+    "release_manifest_projectB_deployment_inconsistent",
+    (fixture) => {
+      fixture.manifest.expectedDeployments.projectB.rollbackDeploymentId =
+        "rewritten-rollback";
+      fixture.rewriteManifest();
+    },
+  );
 });
 
 test("rejects a detached signature not made by the trusted key", () => {

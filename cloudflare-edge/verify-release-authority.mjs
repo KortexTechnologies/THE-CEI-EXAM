@@ -17,6 +17,61 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const GIT_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const SAFE_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$/;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const REQUIRED_GO_RECEIPTS = Object.freeze([
+  { receiptType: "evidence", phase: "go", subject: "local_release" },
+  { receiptType: "evidence", phase: "go", subject: "connected_qa" },
+  { receiptType: "security", phase: "go", subject: "security_diff" },
+  { receiptType: "security", phase: "go", subject: "content_boundary" },
+  { receiptType: "provider", phase: "go", subject: "github_project_a" },
+  { receiptType: "provider", phase: "go", subject: "github_project_b" },
+  { receiptType: "provider", phase: "go", subject: "github_edge" },
+  { receiptType: "provider", phase: "go", subject: "supabase_project_a" },
+  { receiptType: "provider", phase: "go", subject: "supabase_project_b" },
+  { receiptType: "provider", phase: "go", subject: "stripe" },
+  { receiptType: "provider", phase: "go", subject: "cookiebot" },
+  { receiptType: "provider", phase: "go", subject: "cloudflare_edge" },
+  { receiptType: "approval", phase: "go", subject: "product_owner" },
+  { receiptType: "approval", phase: "go", subject: "dpo" },
+  { receiptType: "approval", phase: "go", subject: "singapore_legal" },
+  { receiptType: "approval", phase: "go", subject: "engineering_security" },
+]);
+const LOCAL_GO_REQUIREMENT_IDS = Object.freeze([
+  "trust_policy_valid",
+  "peer_trust_policy_matches",
+  "trusted_release_issuers_configured",
+  ...["projectA", "projectB", "edge"].flatMap((role) => [
+    `${role}_repository_present`,
+    `${role}_authoritative_repository`,
+    `${role}_identity_stable_during_hashing`,
+    `${role}_working_tree_clean`,
+    `${role}_source_hash_present`,
+    `${role}_candidate_bound_production_build`,
+  ]),
+  "project_a_lockfile_hash_present",
+  "project_b_lockfile_hash_present",
+  "project_a_migration_head_present",
+  "project_b_migration_head_present",
+  "project_a_edge_function_hashes_present",
+  "project_b_edge_function_hashes_present",
+  "programme_schedule_file_hash_verified",
+  "product_contract_parity",
+  "legal_v2_2_copy_hashes_match",
+  "legal_effective_metadata_matches_candidate",
+  "complete_canonical_stripe_offer_matrix",
+  "cookiebot_expected_configuration_present",
+  "current_and_rollback_deployments_expected",
+  "observation_window_valid",
+  "intended_effective_timestamp_present",
+]);
+const MANIFEST_POLICY = Object.freeze({
+  unsignedEnvironmentAssertionsAreNeverAuthority: true,
+  evidenceBytesAndDetachedSignaturesRequired: true,
+  providerReadbackReceiptsRequired: true,
+  readyStatusesDoNotAuthoriseRelease: true,
+  goRequiresSignedActionTimeAuthority: true,
+  liveRequiresSignedPostObservationAuthority: true,
+  secretsRawLearnerIdentifiersAndPaymentDataForbidden: true,
+});
 
 export class ReleaseAuthorityError extends Error {
   constructor(code) {
@@ -37,6 +92,7 @@ const hasExactKeys = (value, keys) =>
   isRecord(value) &&
   Object.keys(value).length === keys.length &&
   Object.keys(value).every((key) => keys.includes(key));
+const sameJson = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
 function readRegularFile(path, code) {
   if (!path || !existsSync(path)) fail(`${code}_missing`);
@@ -111,7 +167,7 @@ function validateTrustPolicy(policy, expectedPolicySha256, policyBytes) {
     policy.releaseAuthority.phase !== "go" ||
     policy.releaseAuthority.subject !== "release_authority" ||
     !Array.isArray(policy.requiredGoReceipts) ||
-    policy.requiredGoReceipts.length === 0 ||
+    !sameJson(policy.requiredGoReceipts, REQUIRED_GO_RECEIPTS) ||
     !Array.isArray(policy.trustedIssuers)
   ) {
     fail("trust_policy_schema_invalid");
@@ -243,6 +299,196 @@ function validatePositivePredicate(predicate, code) {
   return ids;
 }
 
+function validateExactGoReadinessPredicate(predicate, policy) {
+  validatePositivePredicate(predicate, "release_manifest_go_readiness");
+  const expectedRequirements = [
+    ...LOCAL_GO_REQUIREMENT_IDS,
+    ...policy.requiredGoReceipts.map(receiptRequirementId),
+  ].map((id) => ({ id, passed: true }));
+  if (!sameJson(predicate.requirements, expectedRequirements)) {
+    fail("release_manifest_go_readiness_derivation_invalid");
+  }
+}
+
+function repositoryEnvelopeFromManifest(repository) {
+  if (!isRecord(repository) || !isRecord(repository.lockfiles) || !isRecord(repository.build)) {
+    fail("release_manifest_repository_identity_invalid");
+  }
+  return {
+    expectedRepositoryUrl: repository.expectedRepositoryUrl,
+    repositoryUrl: repository.repositoryUrl,
+    commitSha: repository.commitSha,
+    treeSha: repository.treeSha,
+    sourceWorkingTreeSha256: repository.sourceWorkingTreeSha256,
+    lockfileAggregateSha256: repository.lockfiles.aggregateSha256,
+    buildSha256: repository.build.sha256,
+    buildArtifactSha256: repository.build.artifactSha256,
+    buildMetadataSha256: repository.build.metadataSha256,
+    buildConfigurationSha256: repository.build.configurationSha256,
+  };
+}
+
+function validateManifestConsistency(manifest) {
+  const manifestKeys = [
+    "marker",
+    "schemaVersion",
+    "releaseId",
+    "generatedAt",
+    "status",
+    "immutableIdentity",
+    "ecosystem",
+    "candidateEnvelope",
+    "candidateFingerprint",
+    "repositories",
+    "database",
+    "releaseFacts",
+    "expectedDeployments",
+    "signedReceipts",
+    "authorisationBindings",
+    "goReadinessPredicate",
+    "goPredicate",
+    "liveReadinessPredicate",
+    "livePredicate",
+    "policy",
+  ];
+  const envelopeKeys = [
+    "schemaVersion",
+    "repositories",
+    "database",
+    "programmeSchedule",
+    "productContract",
+    "legal",
+    "stripe",
+    "cookiebot",
+    "deploymentBaseline",
+    "intendedEffectiveAt",
+    "observationWindow",
+    "trustPolicySha256",
+  ];
+  const repositoryEnvelopeKeys = [
+    "expectedRepositoryUrl",
+    "repositoryUrl",
+    "commitSha",
+    "treeSha",
+    "sourceWorkingTreeSha256",
+    "lockfileAggregateSha256",
+    "buildSha256",
+    "buildArtifactSha256",
+    "buildMetadataSha256",
+    "buildConfigurationSha256",
+  ];
+  if (
+    !hasExactKeys(manifest, manifestKeys) ||
+    !hasExactKeys(manifest.immutableIdentity, [
+      "candidateFingerprint",
+      "manifestPayloadSha256",
+      "trustPolicySha256",
+    ]) ||
+    !hasExactKeys(manifest.candidateEnvelope, envelopeKeys) ||
+    manifest.candidateEnvelope.schemaVersion !== 1 ||
+    !hasExactKeys(manifest.repositories, ["projectA", "projectB", "edge"]) ||
+    !hasExactKeys(manifest.candidateEnvelope.repositories, [
+      "projectA",
+      "projectB",
+      "edge",
+    ]) ||
+    !hasExactKeys(manifest.database, ["projectA", "projectB"]) ||
+    !hasExactKeys(manifest.candidateEnvelope.database, ["projectA", "projectB"]) ||
+    !hasExactKeys(manifest.releaseFacts, [
+      "programmeSchedule",
+      "productContract",
+      "legal",
+      "stripe",
+      "cookiebot",
+      "intendedEffectiveAt",
+      "observationWindow",
+    ]) ||
+    !hasExactKeys(manifest.expectedDeployments, ["projectA", "projectB", "edge"]) ||
+    !hasExactKeys(manifest.candidateEnvelope.deploymentBaseline, [
+      "projectA",
+      "projectB",
+      "edge",
+    ]) ||
+    !sameJson(manifest.policy, MANIFEST_POLICY)
+  ) {
+    fail("release_manifest_exact_schema_invalid");
+  }
+
+  for (const role of ["projectA", "projectB", "edge"]) {
+    const envelopeRepository = manifest.candidateEnvelope.repositories[role];
+    const repository = manifest.repositories[role];
+    if (
+      !hasExactKeys(envelopeRepository, repositoryEnvelopeKeys) ||
+      !sameJson(envelopeRepository, repositoryEnvelopeFromManifest(repository))
+    ) {
+      fail(`release_manifest_${role}_repository_inconsistent`);
+    }
+    const expectedDeployment = manifest.expectedDeployments[role];
+    const deploymentBaseline = manifest.candidateEnvelope.deploymentBaseline[role];
+    if (
+      !hasExactKeys(expectedDeployment, [
+        "currentDeploymentId",
+        "rollbackDeploymentId",
+        "candidateDeploymentId",
+        "deployedCommitSha",
+      ]) ||
+      !hasExactKeys(deploymentBaseline, [
+        "currentDeploymentId",
+        "rollbackDeploymentId",
+      ]) ||
+      !sameJson(deploymentBaseline, {
+        currentDeploymentId: expectedDeployment.currentDeploymentId,
+        rollbackDeploymentId: expectedDeployment.rollbackDeploymentId,
+      })
+    ) {
+      fail(`release_manifest_${role}_deployment_inconsistent`);
+    }
+  }
+
+  const expectedReleaseFacts = {
+    programmeSchedule: manifest.candidateEnvelope.programmeSchedule,
+    productContract: manifest.candidateEnvelope.productContract,
+    legal: manifest.candidateEnvelope.legal,
+    stripe: manifest.candidateEnvelope.stripe,
+    cookiebot: manifest.candidateEnvelope.cookiebot,
+    intendedEffectiveAt: manifest.candidateEnvelope.intendedEffectiveAt,
+    observationWindow: manifest.candidateEnvelope.observationWindow,
+  };
+  if (
+    !sameJson(manifest.database, manifest.candidateEnvelope.database) ||
+    !sameJson(manifest.releaseFacts, expectedReleaseFacts)
+  ) {
+    fail("release_manifest_candidate_duplicates_inconsistent");
+  }
+}
+
+function validateExactAcceptedReceiptSet(manifest, policy) {
+  if (
+    !hasExactKeys(manifest.signedReceipts, ["accepted", "rejected"]) ||
+    !Array.isArray(manifest.signedReceipts.accepted) ||
+    !Array.isArray(manifest.signedReceipts.rejected) ||
+    manifest.signedReceipts.rejected.length !== 0
+  ) {
+    fail("release_manifest_signed_receipt_set_invalid");
+  }
+  const expected = [
+    ...policy.requiredGoReceipts,
+    policy.releaseAuthority,
+  ].map(({ receiptType, phase, subject }) => `${receiptType}:${phase}:${subject}`);
+  const actual = manifest.signedReceipts.accepted.map(
+    (receipt) => `${receipt?.receiptType}:${receipt?.phase}:${receipt?.subject}`,
+  );
+  if (
+    actual.length !== expected.length ||
+    new Set(actual).size !== actual.length ||
+    new Set(manifest.signedReceipts.accepted.map((receipt) => receipt?.receiptSha256)).size !==
+      actual.length ||
+    !sameJson([...actual].sort(), [...expected].sort())
+  ) {
+    fail("release_manifest_signed_receipt_set_invalid");
+  }
+}
+
 function requiredReceiptIdentity(receipt) {
   return {
     receiptType: receipt.receiptType,
@@ -342,6 +588,8 @@ function validateManifest({
   ) {
     fail("release_manifest_schema_or_status_invalid");
   }
+  validateManifestConsistency(manifest);
+  validateExactAcceptedReceiptSet(manifest, policy);
 
   const futureSkewMs = policy.maximumFutureSkewMinutes * 60_000;
   const generatedAt = parseZuluTimestamp(
@@ -404,22 +652,8 @@ function validateManifest({
     fail("release_manifest_edge_rollback_identity_invalid");
   }
 
-  const readinessIds = validatePositivePredicate(
-    manifest.goReadinessPredicate,
-    "release_manifest_go_readiness",
-  );
-  for (const requirement of policy.requiredGoReceipts) {
-    if (!readinessIds.has(receiptRequirementId(requirement))) {
-      fail(`release_manifest_go_requirement_${requirement.subject}_missing`);
-    }
-  }
-  const goIds = validatePositivePredicate(
-    manifest.goPredicate,
-    "release_manifest_go",
-  );
-  if (!goIds.has("signed_action_time_release_authority_approval")) {
-    fail("release_manifest_release_authority_requirement_missing");
-  }
+  validateExactGoReadinessPredicate(manifest.goReadinessPredicate, policy);
+  validatePositivePredicate(manifest.goPredicate, "release_manifest_go");
   const expectedGoRequirements = [
     ...manifest.goReadinessPredicate.requirements,
     { id: "signed_action_time_release_authority_approval", passed: true },
@@ -451,10 +685,11 @@ function validateManifest({
     );
   const goReadinessSha256 = sha256(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       candidateFingerprint,
       requiredReceipts,
       acceptedRequiredReceipts,
+      goReadinessPredicate: manifest.goReadinessPredicate,
     }),
   );
   if (manifest.authorisationBindings.goReadinessSha256 !== goReadinessSha256) {
