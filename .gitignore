@@ -1,1 +1,3 @@
 cloudflare-edge/dist/release-metadata.json
+cloudflare-edge/node_modules/
+cloudflare-edge/.wrangler/

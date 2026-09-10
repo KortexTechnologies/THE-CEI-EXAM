@@ -821,6 +821,12 @@ test("workflow deploys the hash-attested Worker only after authority and credent
     new URL("./wrangler.jsonc", import.meta.url),
     "utf8",
   );
+  const packageJson = JSON.parse(
+    readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+  );
+  const packageLock = JSON.parse(
+    readFileSync(new URL("./package-lock.json", import.meta.url), "utf8"),
+  );
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /release_manifest_asset_id:/);
   assert.match(workflow, /release_authority_receipt_asset_id:/);
@@ -832,23 +838,36 @@ test("workflow deploys the hash-attested Worker only after authority and credent
   assert.match(workflow, /--project-a-deployment-receipt/);
   assert.match(workflow, /--edge-deployment-authority-receipt/);
   const verifyIndex = workflow.indexOf("node verify-release-authority.mjs");
-  const buildIndex = workflow.lastIndexOf(
-    "--outfile=dist/worker.mjs",
+  const installIndex = workflow.lastIndexOf(
+    "npm ci --ignore-scripts --no-audit --no-fund",
   );
-  const metadataIndex = workflow.lastIndexOf(
-    "node write-release-build-metadata.mjs --verify-production",
-  );
+  const buildIndex = workflow.lastIndexOf("npm run build");
+  const metadataIndex = workflow.lastIndexOf("npm run verify:production");
   const credentialIndex = workflow.indexOf(
     "Resolve an existing scoped Cloudflare token",
   );
   const deployIndex = workflow.indexOf(
-    "wrangler@4.123.0 deploy --no-bundle --env production",
+    "npm run deploy:production",
   );
   assert.ok(verifyIndex >= 0);
+  assert.ok(installIndex >= 0);
   assert.ok(buildIndex > verifyIndex);
   assert.ok(metadataIndex > buildIndex);
   assert.ok(credentialIndex > metadataIndex);
   assert.ok(deployIndex > credentialIndex);
   assert.match(wranglerConfiguration, /^\s*"main"\s*:\s*"dist\/worker\.mjs"/m);
-  assert.doesNotMatch(workflow, /wrangler@4\.123\.0 deploy --env production/);
+  assert.equal(
+    packageJson.scripts.build,
+    "esbuild worker/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.mjs",
+  );
+  assert.equal(
+    packageJson.scripts["deploy:production"],
+    "wrangler deploy --no-bundle --env production",
+  );
+  assert.equal(packageJson.devDependencies.esbuild, "0.25.9");
+  assert.equal(packageJson.devDependencies.wrangler, "4.123.0");
+  assert.equal(packageLock.packages["node_modules/esbuild"].version, "0.25.9");
+  assert.equal(packageLock.packages["node_modules/wrangler"].version, "4.123.0");
+  assert.match(workflow, /cache-dependency-path: cloudflare-edge\/package-lock\.json/);
+  assert.doesNotMatch(workflow, /\bnpx\b|npm install(?! locked)/);
 });

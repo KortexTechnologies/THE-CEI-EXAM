@@ -90,20 +90,23 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare-edge/package-lock.json
+
+      - name: Install locked edge toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Test release-authority fail-closed controls
-        run: node --test verify-release-authority.test.mjs
+        run: npm run test:authority
 
       - name: Build Worker from canonical TypeScript source
-        run: npx --yes esbuild@0.25.9 worker/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.mjs
+        run: npm run build
 
       - name: Attest candidate-bound production build
         run: node write-release-build-metadata.mjs --production
 
       - name: Verify edge behaviour
-        run: |
-          node write-release-build-metadata.mjs --verify-production
-          node verify.mjs
+        run: npm run verify:production
 
   deploy:
     name: Deploy production Worker
@@ -128,6 +131,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare-edge/package-lock.json
+
+      - name: Install locked edge toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Download immutable release-authority assets
         shell: bash
@@ -218,10 +226,9 @@ jobs:
 
       - name: Rebuild and attest approved edge candidate
         run: |
-          npx --yes esbuild@0.25.9 worker/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.mjs
-          node write-release-build-metadata.mjs --production
-          node write-release-build-metadata.mjs --verify-production
-          node verify.mjs
+          npm run build
+          npm run attest:production
+          npm run verify:production
 
       - name: Resolve an existing scoped Cloudflare token
         env:
@@ -245,4 +252,4 @@ jobs:
           fi
 
       - name: Deploy production Worker and routes
-        run: npx --yes wrangler@4.123.0 deploy --no-bundle --env production
+        run: npm run deploy:production
