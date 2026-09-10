@@ -4,5 +4,8 @@
 # Critical release surfaces.
 /.github/ @KortexTechnologies
 /cloudflare-edge/ @KortexTechnologies
+/cloudflare-edge/release-authority-trust.json @KortexTechnologies
+/cloudflare-edge/verify-release-authority.mjs @KortexTechnologies
+/cloudflare-edge/verify-release-authority.test.mjs @KortexTechnologies
 /worker/ @KortexTechnologies
 /wrangler.jsonc @KortexTechnologies

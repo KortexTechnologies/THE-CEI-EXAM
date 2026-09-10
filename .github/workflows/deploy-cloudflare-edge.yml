@@ -21,6 +21,18 @@ on:
         description: "SHA-256 of the approved release manifest"
         required: true
         type: string
+      release_manifest_asset_id:
+        description: "GitHub release asset ID containing the approved manifest bytes"
+        required: true
+        type: string
+      release_authority_receipt_asset_id:
+        description: "GitHub release asset ID containing the detached GO authority receipt"
+        required: true
+        type: string
+      release_authority_signature_asset_id:
+        description: "GitHub release asset ID containing the receipt's detached Ed25519 signature"
+        required: true
+        type: string
       candidate_commit_sha:
         description: "Approved edge commit SHA (must equal the dispatched revision)"
         required: true
@@ -55,6 +67,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Test release-authority fail-closed controls
+        run: node --test verify-release-authority.test.mjs
+
       - name: Build Worker from canonical TypeScript source
         run: npx --yes esbuild@0.25.9 worker/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.mjs
 
@@ -68,7 +83,10 @@ jobs:
 
   deploy:
     name: Deploy production Worker
-    if: github.event_name == 'workflow_dispatch' && inputs.production_deployment_approved == true
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.production_deployment_approved == true
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -87,29 +105,53 @@ jobs:
         with:
           node-version: 22
 
-      - name: Validate action-time release authority
+      - name: Download immutable release-authority assets
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_ASSET_ID: ${{ inputs.release_manifest_asset_id }}
+          AUTHORITY_RECEIPT_ASSET_ID: ${{ inputs.release_authority_receipt_asset_id }}
+          AUTHORITY_SIGNATURE_ASSET_ID: ${{ inputs.release_authority_signature_asset_id }}
+        run: |
+          set -euo pipefail
+          for asset_id in "$MANIFEST_ASSET_ID" "$AUTHORITY_RECEIPT_ASSET_ID" "$AUTHORITY_SIGNATURE_ASSET_ID"; do
+            if ! printf '%s' "$asset_id" | grep -Eq '^[1-9][0-9]{0,19}$'; then
+              echo 'Release-authority asset ID is invalid' >&2
+              exit 1
+            fi
+          done
+          evidence_dir="$RUNNER_TEMP/cei-release-authority"
+          mkdir -p "$evidence_dir"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$MANIFEST_ASSET_ID" \
+            > "$evidence_dir/release-manifest.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$AUTHORITY_RECEIPT_ASSET_ID" \
+            > "$evidence_dir/release-authority-receipt.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$AUTHORITY_SIGNATURE_ASSET_ID" \
+            > "$evidence_dir/release-authority-receipt.sig"
+
+      - name: Validate exact manifest and detached GO authority
         env:
           APPROVED_RELEASE_ID: ${{ inputs.release_id }}
           APPROVED_MANIFEST_SHA256: ${{ inputs.release_manifest_sha256 }}
           APPROVED_CANDIDATE_SHA: ${{ inputs.candidate_commit_sha }}
-        run: |
-          if ! printf '%s' "$APPROVED_RELEASE_ID" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$'; then
-            echo 'Invalid release manifest ID' >&2
-            exit 1
-          fi
-          if ! printf '%s' "$APPROVED_MANIFEST_SHA256" | grep -Eq '^[a-f0-9]{64}$'; then
-            echo 'Invalid release manifest SHA-256' >&2
-            exit 1
-          fi
-          if ! printf '%s' "$APPROVED_CANDIDATE_SHA" | grep -Eq '^[a-f0-9]{40}$'; then
-            echo 'Invalid approved edge commit SHA' >&2
-            exit 1
-          fi
-          if [ "$APPROVED_CANDIDATE_SHA" != "$GITHUB_SHA" ]; then
-            echo 'Dispatched edge revision does not match the approved candidate' >&2
-            exit 1
-          fi
+          EXPECTED_TRUST_POLICY_SHA256: ${{ vars.CEI_RELEASE_AUTHORITY_TRUST_POLICY_SHA256 }}
+        run: >-
+          node verify-release-authority.mjs
+          --manifest "${{ runner.temp }}/cei-release-authority/release-manifest.json"
+          --manifest-sha256 "$APPROVED_MANIFEST_SHA256"
+          --release-id "$APPROVED_RELEASE_ID"
+          --authority-receipt "${{ runner.temp }}/cei-release-authority/release-authority-receipt.json"
+          --authority-signature "${{ runner.temp }}/cei-release-authority/release-authority-receipt.sig"
+          --trust-policy "release-authority-trust.json"
+          --expected-trust-policy-sha256 "$EXPECTED_TRUST_POLICY_SHA256"
+          --candidate-sha "$GITHUB_SHA"
+          --dispatched-candidate-sha "$APPROVED_CANDIDATE_SHA"
+          --github-event-name "$GITHUB_EVENT_NAME"
+          --github-ref "$GITHUB_REF"
+          --production-deployment-approved "${{ inputs.production_deployment_approved }}"
 
       - name: Rebuild and attest approved edge candidate
         run: |
