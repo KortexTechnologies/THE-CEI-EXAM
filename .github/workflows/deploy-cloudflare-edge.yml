@@ -12,6 +12,24 @@ on:
       - "cloudflare-edge/**"
       - ".github/workflows/deploy-cloudflare-edge.yml"
   workflow_dispatch:
+    inputs:
+      release_id:
+        description: "Approved immutable release-manifest ID"
+        required: true
+        type: string
+      release_manifest_sha256:
+        description: "SHA-256 of the approved release manifest"
+        required: true
+        type: string
+      candidate_commit_sha:
+        description: "Approved edge commit SHA (must equal the dispatched revision)"
+        required: true
+        type: string
+      production_deployment_approved:
+        description: "Action-time approval to deploy production edge routes"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -45,10 +63,11 @@ jobs:
 
   deploy:
     name: Deploy production Worker
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.production_deployment_approved == true
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: production
     defaults:
       run:
         working-directory: cloudflare-edge
@@ -62,6 +81,30 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Validate action-time release authority
+        shell: bash
+        env:
+          APPROVED_RELEASE_ID: ${{ inputs.release_id }}
+          APPROVED_MANIFEST_SHA256: ${{ inputs.release_manifest_sha256 }}
+          APPROVED_CANDIDATE_SHA: ${{ inputs.candidate_commit_sha }}
+        run: |
+          if ! printf '%s' "$APPROVED_RELEASE_ID" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$'; then
+            echo 'Invalid release manifest ID' >&2
+            exit 1
+          fi
+          if ! printf '%s' "$APPROVED_MANIFEST_SHA256" | grep -Eq '^[a-f0-9]{64}$'; then
+            echo 'Invalid release manifest SHA-256' >&2
+            exit 1
+          fi
+          if ! printf '%s' "$APPROVED_CANDIDATE_SHA" | grep -Eq '^[a-f0-9]{40}$'; then
+            echo 'Invalid approved edge commit SHA' >&2
+            exit 1
+          fi
+          if [ "$APPROVED_CANDIDATE_SHA" != "$GITHUB_SHA" ]; then
+            echo 'Dispatched edge revision does not match the approved candidate' >&2
+            exit 1
+          fi
 
       - name: Resolve an existing scoped Cloudflare token
         env:
