@@ -3,7 +3,7 @@
  *
  * The Worker sits in front of the existing proxied Lovable origin. It only
  * decides between three outcomes:
- *   1. a 308 edge redirect (canonical host / canonical path),
+ *   1. a 301 edge redirect (canonical host / canonical path),
  *   2. pass-through to the origin with the original Request unchanged,
  *   3. a genuine edge 404 for unknown navigations.
  *
@@ -14,7 +14,7 @@
 export const CANONICAL_ORIGIN = "https://theceiexam.com";
 export const CANONICAL_HOST = "theceiexam.com";
 export const WWW_HOST = "www.theceiexam.com";
-export const REDIRECT_STATUS = 308;
+export const REDIRECT_STATUS = 301;
 
 /** Exact-path redirects. Query strings are always preserved by the handler. */
 export const EDGE_REDIRECTS: Readonly<Record<string, string>> = Object.freeze({
@@ -203,7 +203,6 @@ export const PUBLIC_FILES: ReadonlyArray<string> = Object.freeze([
   "/downloads/7-day-cei-cheat-sheet.pdf",
   "/downloads/TheCEIExam-Capability-Brief.pdf",
   "/downloads/cei-variants-routing-reference.pdf",
-  "/downloads/obsidian-mindmap.csv",
   "/favicon.png",
   "/fonts/Inter.woff2",
   "/google-merchant-feed.txt",

@@ -31,17 +31,17 @@ try {
   assert.equal(await unknownHead.text(), "");
 
   const programme = await worker.fetch(new Request("https://theceiexam.com/programme?utm_source=test"));
-  assert.equal(programme.status, 308);
+  assert.equal(programme.status, 301);
   assert.equal(programme.headers.get("location"), "https://theceiexam.com/programmes?utm_source=test");
 
   const www = await worker.fetch(new Request("https://www.theceiexam.com/?utm_source=test"));
-  assert.equal(www.status, 308);
+  assert.equal(www.status, 301);
   assert.equal(www.headers.get("location"), "https://theceiexam.com/?utm_source=test");
 
   const legacyReturn = await worker.fetch(
     new Request("https://theceiexam.com/checkout/success?key=legacy&campaign=keep"),
   );
-  assert.equal(legacyReturn.status, 308);
+  assert.equal(legacyReturn.status, 301);
   const legacyLocation = new URL(legacyReturn.headers.get("location"));
   assert.equal(legacyLocation.pathname, "/purchase-status");
   assert.equal(legacyLocation.searchParams.get("ref"), "legacy");
