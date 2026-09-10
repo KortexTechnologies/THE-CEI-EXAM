@@ -182,4 +182,4 @@ jobs:
           fi
 
       - name: Deploy production Worker and routes
-        run: npx --yes wrangler@4.123.0 deploy --env production
+        run: npx --yes wrangler@4.123.0 deploy --no-bundle --env production

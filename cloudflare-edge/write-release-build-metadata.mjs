@@ -23,6 +23,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const buildDirectory = "cloudflare-edge/dist";
 const metadataRelativePath = `${buildDirectory}/release-metadata.json`;
 const metadataPath = join(root, metadataRelativePath);
+const deployArtifactRelativePath = `${buildDirectory}/worker.mjs`;
+const deployArtifactPath = join(root, deployArtifactRelativePath);
 const command = process.argv.slice(2);
 const writeMode = command.length === 1 && command[0] === "--production";
 const verifyMode = command.length === 1 && command[0] === "--verify-production";
@@ -130,12 +132,27 @@ function readJson(path) {
   }
 }
 
+function productionConfigurationValid() {
+  const configuration = readFileSync(join(root, "cloudflare-edge/wrangler.jsonc"), "utf8");
+  const mainEntries = [
+    ...configuration.matchAll(/^\s*"main"\s*:\s*"([^"]+)"\s*,?\s*$/gm),
+  ].map((match) => match[1]);
+  return (
+    mainEntries.length === 1 &&
+    mainEntries[0] === "dist/worker.mjs" &&
+    existsSync(deployArtifactPath) &&
+    lstatSync(deployArtifactPath).isFile() &&
+    !lstatSync(deployArtifactPath).isSymbolicLink()
+  );
+}
+
 const before = gitSnapshot();
 if (
   before.porcelain !== "" ||
   before.repositoryUrl !== EXPECTED_REPOSITORY_URL ||
   !isGitSha(before.commitSha) ||
-  !isGitSha(before.treeSha)
+  !isGitSha(before.treeSha) ||
+  !productionConfigurationValid()
 ) {
   throw new Error("edge_release_build_repository_not_clean_authoritative_candidate");
 }

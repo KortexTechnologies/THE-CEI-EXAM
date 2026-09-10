@@ -615,9 +615,13 @@ test("rejects a missing protected-environment trust-store hash", () => {
   );
 });
 
-test("workflow keeps deployment behind main, verified evidence and credential resolution order", () => {
+test("workflow deploys the hash-attested Worker only after authority and credential resolution", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-cloudflare-edge.yml", import.meta.url),
+    "utf8",
+  );
+  const wranglerConfiguration = readFileSync(
+    new URL("./wrangler.jsonc", import.meta.url),
     "utf8",
   );
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
@@ -625,13 +629,23 @@ test("workflow keeps deployment behind main, verified evidence and credential re
   assert.match(workflow, /release_authority_receipt_asset_id:/);
   assert.match(workflow, /release_authority_signature_asset_id:/);
   const verifyIndex = workflow.indexOf("node verify-release-authority.mjs");
+  const buildIndex = workflow.lastIndexOf(
+    "--outfile=dist/worker.mjs",
+  );
+  const metadataIndex = workflow.lastIndexOf(
+    "node write-release-build-metadata.mjs --verify-production",
+  );
   const credentialIndex = workflow.indexOf(
     "Resolve an existing scoped Cloudflare token",
   );
   const deployIndex = workflow.indexOf(
-    "wrangler@4.123.0 deploy --env production",
+    "wrangler@4.123.0 deploy --no-bundle --env production",
   );
   assert.ok(verifyIndex >= 0);
-  assert.ok(credentialIndex > verifyIndex);
+  assert.ok(buildIndex > verifyIndex);
+  assert.ok(metadataIndex > buildIndex);
+  assert.ok(credentialIndex > metadataIndex);
   assert.ok(deployIndex > credentialIndex);
+  assert.match(wranglerConfiguration, /^\s*"main"\s*:\s*"dist\/worker\.mjs"/m);
+  assert.doesNotMatch(workflow, /wrangler@4\.123\.0 deploy --env production/);
 });
