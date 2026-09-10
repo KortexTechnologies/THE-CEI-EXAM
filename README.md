@@ -4,16 +4,19 @@ Preparation Platform for Certificate of Employment Intermediaries Exam
 
 ## Production edge release authority
 
-The production workflow consumes three GitHub release-asset IDs from this
-repository: the immutable schema-v2 release manifest bytes, the detached GO
-authority receipt, and its detached Ed25519 signature. It recomputes the
-manifest SHA-256, candidate fingerprint, payload hash and GO-readiness binding;
-then it requires the manifest, receipt, selected `main` revision and running
-edge commit to agree before the Cloudflare credential step is reached.
+The production workflow consumes the immutable schema-v2 release manifest, the
+detached GO authority receipt and signature, signed Project B then Project A
+production-deployment readbacks, and a separate post-readback edge-deployment
+authority. It recomputes the manifest SHA-256, candidate fingerprint, payload
+hash and exact GO-readiness binding. It then requires the signed sequence
+`GO -> Project B -> Project A -> edge deployment authority`, including the
+candidate and rollback identifiers, before the Cloudflare credential step is
+reached.
 
 `cloudflare-edge/release-authority-trust.json` deliberately contains no trusted
-issuer yet. A repository owner must approve the real release-authority public
-key and key scopes in that file, then place the exact file SHA-256 in the
+issuer yet. A repository owner must approve the real GO, provider-readback and
+edge-deployment-authority public keys and their narrow scopes in that file,
+then place the exact file SHA-256 in the
 protected `production` environment variable
 `CEI_RELEASE_AUTHORITY_TRUST_POLICY_SHA256`. Missing keys, a missing/mismatched
 environment hash, a non-main dispatch, a stale or out-of-order receipt, or an

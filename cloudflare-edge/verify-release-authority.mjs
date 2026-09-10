@@ -12,6 +12,8 @@ export const RELEASE_AUTHORITY_VERIFICATION =
   "CEI_EDGE_RELEASE_AUTHORITY_VERIFICATION";
 const RELEASE_MANIFEST_MARKER = "ECOSYSTEM_RELEASE_MANIFEST";
 const RELEASE_RECEIPT_MARKER = "CEI_SIGNED_RELEASE_RECEIPT";
+const PRODUCTION_DEPLOYMENT_RECEIPT_MARKER =
+  "CEI_SIGNED_PRODUCTION_DEPLOYMENT_RECEIPT";
 const TRUST_POLICY_MARKER = "CEI_EDGE_RELEASE_AUTHORITY_TRUST_POLICY";
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const GIT_SHA_PATTERN = /^[a-f0-9]{40}$/;
@@ -136,8 +138,12 @@ function validateTrustPolicy(policy, expectedPolicySha256, policyBytes) {
     "expectedRepositoryUrl",
     "maximumManifestAgeHours",
     "maximumReleaseAuthorityAgeHours",
+    "maximumProductionDeploymentReceiptAgeHours",
+    "maximumEdgeDeploymentAuthorityAgeHours",
     "maximumFutureSkewMinutes",
     "releaseAuthority",
+    "productionDeployments",
+    "edgeDeploymentAuthority",
     "requiredGoReceipts",
     "trustedIssuers",
   ];
@@ -155,6 +161,10 @@ function validateTrustPolicy(policy, expectedPolicySha256, policyBytes) {
     policy.maximumManifestAgeHours <= 0 ||
     !Number.isFinite(policy.maximumReleaseAuthorityAgeHours) ||
     policy.maximumReleaseAuthorityAgeHours <= 0 ||
+    !Number.isFinite(policy.maximumProductionDeploymentReceiptAgeHours) ||
+    policy.maximumProductionDeploymentReceiptAgeHours <= 0 ||
+    !Number.isFinite(policy.maximumEdgeDeploymentAuthorityAgeHours) ||
+    policy.maximumEdgeDeploymentAuthorityAgeHours <= 0 ||
     !Number.isSafeInteger(policy.maximumFutureSkewMinutes) ||
     policy.maximumFutureSkewMinutes < 0 ||
     policy.maximumFutureSkewMinutes > 30 ||
@@ -166,6 +176,28 @@ function validateTrustPolicy(policy, expectedPolicySha256, policyBytes) {
     policy.releaseAuthority.receiptType !== "approval" ||
     policy.releaseAuthority.phase !== "go" ||
     policy.releaseAuthority.subject !== "release_authority" ||
+    !sameJson(policy.productionDeployments, [
+      {
+        receiptType: "provider",
+        phase: "deploy",
+        subject: "project_b_production_deployment",
+        role: "projectB",
+      },
+      {
+        receiptType: "provider",
+        phase: "deploy",
+        subject: "project_a_production_deployment",
+        role: "projectA",
+      },
+    ]) ||
+    !hasExactKeys(policy.edgeDeploymentAuthority, [
+      "receiptType",
+      "phase",
+      "subject",
+    ]) ||
+    policy.edgeDeploymentAuthority.receiptType !== "approval" ||
+    policy.edgeDeploymentAuthority.phase !== "deploy" ||
+    policy.edgeDeploymentAuthority.subject !== "edge_deployment_authority" ||
     !Array.isArray(policy.requiredGoReceipts) ||
     !sameJson(policy.requiredGoReceipts, REQUIRED_GO_RECEIPTS) ||
     !Array.isArray(policy.trustedIssuers)
@@ -194,7 +226,20 @@ function validateTrustPolicy(policy, expectedPolicySha256, policyBytes) {
   if (policy.trustedIssuers.length === 0)
     fail("trust_policy_no_trusted_issuers");
   const issuers = new Map();
+  const recognisedScopes = [
+    ["approval", policy.releaseAuthority.subject],
+    ...policy.productionDeployments.map((requirement) => [
+      requirement.receiptType,
+      requirement.subject,
+    ]),
+    ["approval", policy.edgeDeploymentAuthority.subject],
+  ];
   for (const issuer of policy.trustedIssuers) {
+    const supportsRecognisedScope = recognisedScopes.some(
+      ([receiptType, subject]) =>
+        issuer?.allowedReceiptTypes?.includes(receiptType) &&
+        issuer?.allowedSubjects?.includes(subject),
+    );
     if (
       !hasExactKeys(issuer, [
         "keyId",
@@ -207,9 +252,12 @@ function validateTrustPolicy(policy, expectedPolicySha256, policyBytes) {
       issuer.algorithm !== "ed25519" ||
       typeof issuer.publicKeyPem !== "string" ||
       !Array.isArray(issuer.allowedReceiptTypes) ||
+      issuer.allowedReceiptTypes.length === 0 ||
+      new Set(issuer.allowedReceiptTypes).size !== issuer.allowedReceiptTypes.length ||
       !Array.isArray(issuer.allowedSubjects) ||
-      !issuer.allowedReceiptTypes.includes("approval") ||
-      !issuer.allowedSubjects.includes(policy.releaseAuthority.subject) ||
+      issuer.allowedSubjects.length === 0 ||
+      new Set(issuer.allowedSubjects).size !== issuer.allowedSubjects.length ||
+      !supportsRecognisedScope ||
       issuers.has(issuer.keyId)
     ) {
       fail("trust_policy_issuer_invalid");
@@ -721,6 +769,40 @@ function canonicalBase64(value) {
   return bytes.toString("base64") === value ? bytes : null;
 }
 
+function verifyTrustedReceiptSignature({
+  receipt,
+  receiptBytes,
+  signatureBytes,
+  issuers,
+  code,
+}) {
+  const issuer = issuers.get(receipt.keyId);
+  if (
+    !issuer ||
+    !issuer.allowedReceiptTypes.includes(receipt.receiptType) ||
+    !issuer.allowedSubjects.includes(receipt.subject)
+  ) {
+    fail(`${code}_issuer_untrusted_or_out_of_scope`);
+  }
+  const encodedSignature = signatureBytes.toString("utf8").trim();
+  const signature = canonicalBase64(encodedSignature);
+  if (!signature || signature.length !== 64)
+    fail(`${code}_signature_encoding_invalid`);
+  let signatureValid = false;
+  try {
+    signatureValid = verifyDetachedSignature(
+      null,
+      receiptBytes,
+      createPublicKey(issuer.publicKeyPem),
+      signature,
+    );
+  } catch {
+    signatureValid = false;
+  }
+  if (!signatureValid) fail(`${code}_signature_invalid`);
+  return issuer;
+}
+
 function validateAuthorityReceipt({
   receipt,
   receiptBytes,
@@ -789,24 +871,13 @@ function validateAuthorityReceipt({
     fail("release_authority_receipt_stale_future_or_out_of_order");
   }
 
-  const issuer = issuers.get(receipt.keyId);
-  if (!issuer) fail("release_authority_issuer_untrusted");
-  const encodedSignature = signatureBytes.toString("utf8").trim();
-  const signature = canonicalBase64(encodedSignature);
-  if (!signature || signature.length !== 64)
-    fail("release_authority_signature_encoding_invalid");
-  let signatureValid = false;
-  try {
-    signatureValid = verifyDetachedSignature(
-      null,
-      receiptBytes,
-      createPublicKey(issuer.publicKeyPem),
-      signature,
-    );
-  } catch {
-    signatureValid = false;
-  }
-  if (!signatureValid) fail("release_authority_signature_invalid");
+  verifyTrustedReceiptSignature({
+    receipt,
+    receiptBytes,
+    signatureBytes,
+    issuers,
+    code: "release_authority",
+  });
 
   const receiptSha256 = sha256(receiptBytes);
   const accepted = manifest.signedReceipts.accepted.filter(
@@ -835,10 +906,238 @@ function validateAuthorityReceipt({
   return { receiptSha256, issuedAt, expiresAt, keyId: receipt.keyId };
 }
 
+function productionDeploymentBinding(manifest, requirement) {
+  const repository = manifest.candidateEnvelope.repositories[requirement.role];
+  const deployment = manifest.expectedDeployments[requirement.role];
+  if (
+    !isRecord(repository) ||
+    !isRecord(deployment) ||
+    !GIT_SHA_PATTERN.test(repository.commitSha ?? "") ||
+    !SAFE_REFERENCE_PATTERN.test(deployment.currentDeploymentId ?? "") ||
+    !SAFE_REFERENCE_PATTERN.test(deployment.rollbackDeploymentId ?? "") ||
+    !SAFE_REFERENCE_PATTERN.test(deployment.candidateDeploymentId ?? "") ||
+    !GIT_SHA_PATTERN.test(deployment.deployedCommitSha ?? "") ||
+    deployment.deployedCommitSha !== repository.commitSha ||
+    deployment.currentDeploymentId === deployment.rollbackDeploymentId ||
+    deployment.candidateDeploymentId === deployment.currentDeploymentId ||
+    deployment.candidateDeploymentId === deployment.rollbackDeploymentId
+  ) {
+    fail(`production_${requirement.role}_deployment_manifest_identity_invalid`);
+  }
+  return {
+    schemaVersion: 1,
+    candidateFingerprint: manifest.candidateFingerprint,
+    role: requirement.role,
+    repositoryCommitSha: repository.commitSha,
+    currentDeploymentId: deployment.currentDeploymentId,
+    rollbackDeploymentId: deployment.rollbackDeploymentId,
+    candidateDeploymentId: deployment.candidateDeploymentId,
+    deployedCommitSha: deployment.deployedCommitSha,
+  };
+}
+
+function validateProductionDeploymentReceipt({
+  receipt,
+  receiptBytes,
+  signatureBytes,
+  manifest,
+  requirement,
+  issuers,
+  policy,
+  nowMs,
+  strictlyAfter,
+}) {
+  const receiptKeys = [
+    "marker",
+    "schemaVersion",
+    "receiptType",
+    "phase",
+    "subject",
+    "candidateFingerprint",
+    "bindingSha256",
+    "result",
+    "role",
+    "repositoryCommitSha",
+    "currentDeploymentId",
+    "rollbackDeploymentId",
+    "candidateDeploymentId",
+    "deployedCommitSha",
+    "issuedAt",
+    "expiresAt",
+    "keyId",
+    "reference",
+  ];
+  const binding = productionDeploymentBinding(manifest, requirement);
+  const expectedBindingSha256 = sha256(JSON.stringify(binding));
+  if (
+    !hasExactKeys(receipt, receiptKeys) ||
+    receipt.marker !== PRODUCTION_DEPLOYMENT_RECEIPT_MARKER ||
+    receipt.schemaVersion !== 1 ||
+    receipt.receiptType !== requirement.receiptType ||
+    receipt.phase !== requirement.phase ||
+    receipt.subject !== requirement.subject ||
+    receipt.candidateFingerprint !== manifest.candidateFingerprint ||
+    receipt.bindingSha256 !== expectedBindingSha256 ||
+    receipt.result !== "verified" ||
+    receipt.role !== binding.role ||
+    receipt.repositoryCommitSha !== binding.repositoryCommitSha ||
+    receipt.currentDeploymentId !== binding.currentDeploymentId ||
+    receipt.rollbackDeploymentId !== binding.rollbackDeploymentId ||
+    receipt.candidateDeploymentId !== binding.candidateDeploymentId ||
+    receipt.deployedCommitSha !== binding.deployedCommitSha ||
+    !SAFE_REFERENCE_PATTERN.test(receipt.keyId ?? "") ||
+    !SAFE_REFERENCE_PATTERN.test(receipt.reference ?? "")
+  ) {
+    fail(`production_${requirement.role}_deployment_receipt_invalid`);
+  }
+  const issuedAt = parseZuluTimestamp(
+    receipt.issuedAt,
+    `production_${requirement.role}_deployment_issued_at`,
+  );
+  const expiresAt = parseZuluTimestamp(
+    receipt.expiresAt,
+    `production_${requirement.role}_deployment_expires_at`,
+  );
+  const futureSkewMs = policy.maximumFutureSkewMinutes * 60_000;
+  if (
+    issuedAt <= strictlyAfter ||
+    issuedAt > nowMs + futureSkewMs ||
+    expiresAt <= nowMs ||
+    expiresAt <= issuedAt ||
+    nowMs - issuedAt >
+      policy.maximumProductionDeploymentReceiptAgeHours * 60 * 60_000
+  ) {
+    fail(`production_${requirement.role}_deployment_stale_or_out_of_order`);
+  }
+  verifyTrustedReceiptSignature({
+    receipt,
+    receiptBytes,
+    signatureBytes,
+    issuers,
+    code: `production_${requirement.role}_deployment`,
+  });
+  return {
+    ...binding,
+    receiptType: receipt.receiptType,
+    phase: receipt.phase,
+    subject: receipt.subject,
+    receiptSha256: sha256(receiptBytes),
+    bindingSha256: receipt.bindingSha256,
+    keyId: receipt.keyId,
+    issuedAt: receipt.issuedAt,
+    expiresAt: receipt.expiresAt,
+    issuedTime: issuedAt,
+  };
+}
+
+function validateEdgeDeploymentAuthority({
+  receipt,
+  receiptBytes,
+  signatureBytes,
+  manifest,
+  manifestIdentity,
+  goAuthorityIdentity,
+  productionDeployments,
+  policy,
+  issuers,
+  nowMs,
+}) {
+  const edgeDeployment = manifest.expectedDeployments.edge;
+  const readiness = {
+    schemaVersion: 1,
+    candidateFingerprint: manifestIdentity.candidateFingerprint,
+    goAuthorityReceiptSha256: goAuthorityIdentity.receiptSha256,
+    productionDeployments: productionDeployments.map(({ issuedTime, ...item }) => item),
+    edge: {
+      commitSha: manifest.candidateEnvelope.repositories.edge.commitSha,
+      treeSha: manifest.candidateEnvelope.repositories.edge.treeSha,
+      currentDeploymentId: edgeDeployment.currentDeploymentId,
+      rollbackDeploymentId: edgeDeployment.rollbackDeploymentId,
+    },
+  };
+  const readinessSha256 = sha256(JSON.stringify(readiness));
+  const requirement = policy.edgeDeploymentAuthority;
+  if (
+    !hasExactKeys(receipt, [
+      "marker",
+      "schemaVersion",
+      "receiptType",
+      "phase",
+      "subject",
+      "candidateFingerprint",
+      "bindingSha256",
+      "artifactSha256",
+      "result",
+      "issuedAt",
+      "expiresAt",
+      "keyId",
+      "displayName",
+      "reference",
+    ]) ||
+    receipt.marker !== RELEASE_RECEIPT_MARKER ||
+    receipt.schemaVersion !== 1 ||
+    receipt.receiptType !== requirement.receiptType ||
+    receipt.phase !== requirement.phase ||
+    receipt.subject !== requirement.subject ||
+    receipt.candidateFingerprint !== manifestIdentity.candidateFingerprint ||
+    receipt.bindingSha256 !== readinessSha256 ||
+    receipt.artifactSha256 !== null ||
+    receipt.result !== "approved" ||
+    !SAFE_REFERENCE_PATTERN.test(receipt.keyId ?? "") ||
+    typeof receipt.displayName !== "string" ||
+    receipt.displayName.trim() !== receipt.displayName ||
+    receipt.displayName.length < 2 ||
+    receipt.displayName.length > 120 ||
+    /[@<>\r\n]/.test(receipt.displayName) ||
+    !SAFE_REFERENCE_PATTERN.test(receipt.reference ?? "")
+  ) {
+    fail("edge_deployment_authority_receipt_invalid");
+  }
+  const issuedAt = parseZuluTimestamp(
+    receipt.issuedAt,
+    "edge_deployment_authority_issued_at",
+  );
+  const expiresAt = parseZuluTimestamp(
+    receipt.expiresAt,
+    "edge_deployment_authority_expires_at",
+  );
+  const latestDeploymentTime = productionDeployments.at(-1).issuedTime;
+  const futureSkewMs = policy.maximumFutureSkewMinutes * 60_000;
+  if (
+    issuedAt <= latestDeploymentTime ||
+    issuedAt > nowMs + futureSkewMs ||
+    expiresAt <= nowMs ||
+    expiresAt <= issuedAt ||
+    nowMs - issuedAt > policy.maximumEdgeDeploymentAuthorityAgeHours * 60 * 60_000
+  ) {
+    fail("edge_deployment_authority_stale_or_out_of_order");
+  }
+  verifyTrustedReceiptSignature({
+    receipt,
+    receiptBytes,
+    signatureBytes,
+    issuers,
+    code: "edge_deployment_authority",
+  });
+  return {
+    readinessSha256,
+    receiptSha256: sha256(receiptBytes),
+    keyId: receipt.keyId,
+    issuedAt,
+    expiresAt,
+  };
+}
+
 export function verifyReleaseAuthority({
   manifestPath,
   authorityReceiptPath,
   authoritySignaturePath,
+  projectBDeploymentReceiptPath,
+  projectBDeploymentSignaturePath,
+  projectADeploymentReceiptPath,
+  projectADeploymentSignaturePath,
+  edgeDeploymentAuthorityReceiptPath,
+  edgeDeploymentAuthoritySignaturePath,
   trustPolicyPath,
   expectedManifestSha256,
   expectedTrustPolicySha256,
@@ -897,6 +1196,70 @@ export function verifyReleaseAuthority({
     issuers,
     nowMs,
   });
+  const deploymentPaths = {
+    projectB: {
+      receipt: projectBDeploymentReceiptPath,
+      signature: projectBDeploymentSignaturePath,
+    },
+    projectA: {
+      receipt: projectADeploymentReceiptPath,
+      signature: projectADeploymentSignaturePath,
+    },
+  };
+  const productionDeployments = [];
+  let strictlyAfter = receiptIdentity.issuedAt;
+  for (const requirement of policy.productionDeployments) {
+    const paths = deploymentPaths[requirement.role];
+    const deploymentReceiptBytes = readRegularFile(
+      paths?.receipt,
+      `production_${requirement.role}_deployment_receipt`,
+    );
+    const deploymentReceipt = parseJson(
+      deploymentReceiptBytes,
+      `production_${requirement.role}_deployment_receipt`,
+    );
+    const deploymentSignatureBytes = readRegularFile(
+      paths?.signature,
+      `production_${requirement.role}_deployment_signature`,
+    );
+    const deploymentIdentity = validateProductionDeploymentReceipt({
+      receipt: deploymentReceipt,
+      receiptBytes: deploymentReceiptBytes,
+      signatureBytes: deploymentSignatureBytes,
+      manifest,
+      requirement,
+      issuers,
+      policy,
+      nowMs,
+      strictlyAfter,
+    });
+    productionDeployments.push(deploymentIdentity);
+    strictlyAfter = deploymentIdentity.issuedTime;
+  }
+  const edgeAuthorityReceiptBytes = readRegularFile(
+    edgeDeploymentAuthorityReceiptPath,
+    "edge_deployment_authority_receipt",
+  );
+  const edgeAuthorityReceipt = parseJson(
+    edgeAuthorityReceiptBytes,
+    "edge_deployment_authority_receipt",
+  );
+  const edgeAuthoritySignatureBytes = readRegularFile(
+    edgeDeploymentAuthoritySignaturePath,
+    "edge_deployment_authority_signature",
+  );
+  const edgeAuthorityIdentity = validateEdgeDeploymentAuthority({
+    receipt: edgeAuthorityReceipt,
+    receiptBytes: edgeAuthorityReceiptBytes,
+    signatureBytes: edgeAuthoritySignatureBytes,
+    manifest,
+    manifestIdentity,
+    goAuthorityIdentity: receiptIdentity,
+    productionDeployments,
+    policy,
+    issuers,
+    nowMs,
+  });
   return {
     marker: RELEASE_AUTHORITY_VERIFICATION,
     schemaVersion: 1,
@@ -910,6 +1273,17 @@ export function verifyReleaseAuthority({
     authorityKeyId: receiptIdentity.keyId,
     authorityIssuedAt: new Date(receiptIdentity.issuedAt).toISOString(),
     authorityExpiresAt: new Date(receiptIdentity.expiresAt).toISOString(),
+    projectBDeploymentReceiptSha256: productionDeployments[0].receiptSha256,
+    projectADeploymentReceiptSha256: productionDeployments[1].receiptSha256,
+    edgeDeploymentReadinessSha256: edgeAuthorityIdentity.readinessSha256,
+    edgeDeploymentAuthorityReceiptSha256: edgeAuthorityIdentity.receiptSha256,
+    edgeDeploymentAuthorityKeyId: edgeAuthorityIdentity.keyId,
+    edgeDeploymentAuthorityIssuedAt: new Date(
+      edgeAuthorityIdentity.issuedAt,
+    ).toISOString(),
+    edgeDeploymentAuthorityExpiresAt: new Date(
+      edgeAuthorityIdentity.expiresAt,
+    ).toISOString(),
   };
 }
 
@@ -920,6 +1294,12 @@ function parseArguments(argv) {
     "release-id",
     "authority-receipt",
     "authority-signature",
+    "project-b-deployment-receipt",
+    "project-b-deployment-signature",
+    "project-a-deployment-receipt",
+    "project-a-deployment-signature",
+    "edge-deployment-authority-receipt",
+    "edge-deployment-authority-signature",
     "trust-policy",
     "expected-trust-policy-sha256",
     "candidate-sha",
@@ -953,6 +1333,16 @@ if (
       manifestPath: args.manifest,
       authorityReceiptPath: args["authority-receipt"],
       authoritySignaturePath: args["authority-signature"],
+      projectBDeploymentReceiptPath: args["project-b-deployment-receipt"],
+      projectBDeploymentSignaturePath:
+        args["project-b-deployment-signature"],
+      projectADeploymentReceiptPath: args["project-a-deployment-receipt"],
+      projectADeploymentSignaturePath:
+        args["project-a-deployment-signature"],
+      edgeDeploymentAuthorityReceiptPath:
+        args["edge-deployment-authority-receipt"],
+      edgeDeploymentAuthoritySignaturePath:
+        args["edge-deployment-authority-signature"],
       trustPolicyPath: args["trust-policy"],
       expectedManifestSha256: args["manifest-sha256"],
       expectedTrustPolicySha256: args["expected-trust-policy-sha256"],

@@ -4,11 +4,32 @@
   "expectedRepositoryUrl": "https://github.com/KortexTechnologies/THE-CEI-EXAM.git",
   "maximumManifestAgeHours": 24,
   "maximumReleaseAuthorityAgeHours": 24,
+  "maximumProductionDeploymentReceiptAgeHours": 24,
+  "maximumEdgeDeploymentAuthorityAgeHours": 4,
   "maximumFutureSkewMinutes": 5,
   "releaseAuthority": {
     "receiptType": "approval",
     "phase": "go",
     "subject": "release_authority"
+  },
+  "productionDeployments": [
+    {
+      "receiptType": "provider",
+      "phase": "deploy",
+      "subject": "project_b_production_deployment",
+      "role": "projectB"
+    },
+    {
+      "receiptType": "provider",
+      "phase": "deploy",
+      "subject": "project_a_production_deployment",
+      "role": "projectA"
+    }
+  ],
+  "edgeDeploymentAuthority": {
+    "receiptType": "approval",
+    "phase": "deploy",
+    "subject": "edge_deployment_authority"
   },
   "requiredGoReceipts": [
     { "receiptType": "evidence", "phase": "go", "subject": "local_release" },

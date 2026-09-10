@@ -80,6 +80,9 @@ function makeFixture({
   candidateSha = CANDIDATE_SHA,
   authorityIssuedAt = "2026-09-10T23:30:00.000Z",
   prerequisiteIssuedAt = "2026-09-10T23:00:00.000Z",
+  projectBDeploymentIssuedAt = "2026-09-10T23:40:00.000Z",
+  projectADeploymentIssuedAt = "2026-09-10T23:45:00.000Z",
+  edgeDeploymentAuthorityIssuedAt = "2026-09-10T23:50:00.000Z",
   expiresAt = "2026-09-12T00:00:00.000Z",
   goPasses = true,
   trusted = true,
@@ -90,6 +93,12 @@ function makeFixture({
     manifest: join(directory, "manifest.json"),
     receipt: join(directory, "receipt.json"),
     signature: join(directory, "receipt.sig"),
+    projectBDeploymentReceipt: join(directory, "project-b-deployment-receipt.json"),
+    projectBDeploymentSignature: join(directory, "project-b-deployment-receipt.sig"),
+    projectADeploymentReceipt: join(directory, "project-a-deployment-receipt.json"),
+    projectADeploymentSignature: join(directory, "project-a-deployment-receipt.sig"),
+    edgeDeploymentAuthorityReceipt: join(directory, "edge-deployment-authority-receipt.json"),
+    edgeDeploymentAuthoritySignature: join(directory, "edge-deployment-authority-receipt.sig"),
   };
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const policy = {
@@ -98,11 +107,32 @@ function makeFixture({
     expectedRepositoryUrl: REPOSITORY_URL,
     maximumManifestAgeHours: 24,
     maximumReleaseAuthorityAgeHours: 24,
+    maximumProductionDeploymentReceiptAgeHours: 24,
+    maximumEdgeDeploymentAuthorityAgeHours: 4,
     maximumFutureSkewMinutes: 5,
     releaseAuthority: {
       receiptType: "approval",
       phase: "go",
       subject: "release_authority",
+    },
+    productionDeployments: [
+      {
+        receiptType: "provider",
+        phase: "deploy",
+        subject: "project_b_production_deployment",
+        role: "projectB",
+      },
+      {
+        receiptType: "provider",
+        phase: "deploy",
+        subject: "project_a_production_deployment",
+        role: "projectA",
+      },
+    ],
+    edgeDeploymentAuthority: {
+      receiptType: "approval",
+      phase: "deploy",
+      subject: "edge_deployment_authority",
     },
     requiredGoReceipts,
     trustedIssuers: trusted
@@ -111,8 +141,13 @@ function makeFixture({
             keyId: "release-key-2026-09",
             algorithm: "ed25519",
             publicKeyPem: publicKey.export({ type: "spki", format: "pem" }),
-            allowedReceiptTypes: ["approval"],
-            allowedSubjects: ["release_authority"],
+            allowedReceiptTypes: ["approval", "provider"],
+            allowedSubjects: [
+              "release_authority",
+              "project_b_production_deployment",
+              "project_a_production_deployment",
+              "edge_deployment_authority",
+            ],
           },
         ]
       : [],
@@ -320,14 +355,14 @@ function makeFixture({
     projectA: {
       currentDeploymentId: "a-current",
       rollbackDeploymentId: "a-rollback",
-      candidateDeploymentId: null,
-      deployedCommitSha: null,
+      candidateDeploymentId: "a-candidate",
+      deployedCommitSha: repositoryEnvelope.projectA.commitSha,
     },
     projectB: {
       currentDeploymentId: "b-current",
       rollbackDeploymentId: "b-rollback",
-      candidateDeploymentId: null,
-      deployedCommitSha: null,
+      candidateDeploymentId: "b-candidate",
+      deployedCommitSha: repositoryEnvelope.projectB.commitSha,
     },
     edge: {
       currentDeploymentId: "edge-current",
@@ -390,12 +425,119 @@ function makeFixture({
       secretsRawLearnerIdentifiersAndPaymentDataForbidden: true,
     },
   };
+  const deploymentReceiptFixture = (requirement, issuedAt, receiptPath, signaturePath) => {
+    const deployment = manifest.expectedDeployments[requirement.role];
+    const repository = manifest.candidateEnvelope.repositories[requirement.role];
+    const binding = {
+      schemaVersion: 1,
+      candidateFingerprint,
+      role: requirement.role,
+      repositoryCommitSha: repository.commitSha,
+      currentDeploymentId: deployment.currentDeploymentId,
+      rollbackDeploymentId: deployment.rollbackDeploymentId,
+      candidateDeploymentId: deployment.candidateDeploymentId,
+      deployedCommitSha: deployment.deployedCommitSha,
+    };
+    const deploymentReceipt = {
+      marker: "CEI_SIGNED_PRODUCTION_DEPLOYMENT_RECEIPT",
+      schemaVersion: 1,
+      receiptType: requirement.receiptType,
+      phase: requirement.phase,
+      subject: requirement.subject,
+      candidateFingerprint,
+      bindingSha256: sha256(JSON.stringify(binding)),
+      result: "verified",
+      role: requirement.role,
+      repositoryCommitSha: binding.repositoryCommitSha,
+      currentDeploymentId: binding.currentDeploymentId,
+      rollbackDeploymentId: binding.rollbackDeploymentId,
+      candidateDeploymentId: binding.candidateDeploymentId,
+      deployedCommitSha: binding.deployedCommitSha,
+      issuedAt,
+      expiresAt,
+      keyId: "release-key-2026-09",
+      reference: `${requirement.role}-production-readback`,
+    };
+    writeJson(receiptPath, deploymentReceipt);
+    const deploymentReceiptBytes = readFileSync(receiptPath);
+    writeFileSync(
+      signaturePath,
+      `${sign(null, deploymentReceiptBytes, privateKey).toString("base64")}\n`,
+      "utf8",
+    );
+    return {
+      ...binding,
+      receiptType: deploymentReceipt.receiptType,
+      phase: deploymentReceipt.phase,
+      subject: deploymentReceipt.subject,
+      receiptSha256: sha256(deploymentReceiptBytes),
+      bindingSha256: deploymentReceipt.bindingSha256,
+      keyId: deploymentReceipt.keyId,
+      issuedAt: deploymentReceipt.issuedAt,
+      expiresAt: deploymentReceipt.expiresAt,
+    };
+  };
+  const projectBDeployment = deploymentReceiptFixture(
+    policy.productionDeployments[0],
+    projectBDeploymentIssuedAt,
+    paths.projectBDeploymentReceipt,
+    paths.projectBDeploymentSignature,
+  );
+  const projectADeployment = deploymentReceiptFixture(
+    policy.productionDeployments[1],
+    projectADeploymentIssuedAt,
+    paths.projectADeploymentReceipt,
+    paths.projectADeploymentSignature,
+  );
+  const edgeDeploymentReadiness = {
+    schemaVersion: 1,
+    candidateFingerprint,
+    goAuthorityReceiptSha256: sha256(receiptBytes),
+    productionDeployments: [projectBDeployment, projectADeployment],
+    edge: {
+      commitSha: candidateEnvelope.repositories.edge.commitSha,
+      treeSha: candidateEnvelope.repositories.edge.treeSha,
+      currentDeploymentId: expectedDeployments.edge.currentDeploymentId,
+      rollbackDeploymentId: expectedDeployments.edge.rollbackDeploymentId,
+    },
+  };
+  const edgeDeploymentAuthorityReceipt = {
+    marker: "CEI_SIGNED_RELEASE_RECEIPT",
+    schemaVersion: 1,
+    receiptType: "approval",
+    phase: "deploy",
+    subject: "edge_deployment_authority",
+    candidateFingerprint,
+    bindingSha256: sha256(JSON.stringify(edgeDeploymentReadiness)),
+    artifactSha256: null,
+    result: "approved",
+    issuedAt: edgeDeploymentAuthorityIssuedAt,
+    expiresAt,
+    keyId: "release-key-2026-09",
+    displayName: "Edge Deployment Authority",
+    reference: "EDGE-DEPLOY-2026-09-11",
+  };
+  writeJson(paths.edgeDeploymentAuthorityReceipt, edgeDeploymentAuthorityReceipt);
+  const edgeDeploymentAuthorityReceiptBytes = readFileSync(
+    paths.edgeDeploymentAuthorityReceipt,
+  );
+  writeFileSync(
+    paths.edgeDeploymentAuthoritySignature,
+    `${sign(null, edgeDeploymentAuthorityReceiptBytes, privateKey).toString("base64")}\n`,
+    "utf8",
+  );
   writeJson(paths.manifest, manifest);
 
   const input = {
     manifestPath: paths.manifest,
     authorityReceiptPath: paths.receipt,
     authoritySignaturePath: paths.signature,
+    projectBDeploymentReceiptPath: paths.projectBDeploymentReceipt,
+    projectBDeploymentSignaturePath: paths.projectBDeploymentSignature,
+    projectADeploymentReceiptPath: paths.projectADeploymentReceipt,
+    projectADeploymentSignaturePath: paths.projectADeploymentSignature,
+    edgeDeploymentAuthorityReceiptPath: paths.edgeDeploymentAuthorityReceipt,
+    edgeDeploymentAuthoritySignaturePath: paths.edgeDeploymentAuthoritySignature,
     trustPolicyPath: paths.policy,
     expectedManifestSha256: sha256(readFileSync(paths.manifest)),
     expectedTrustPolicySha256: sha256(readFileSync(paths.policy)),
@@ -409,8 +551,10 @@ function makeFixture({
   };
   return {
     directory,
+    paths,
     input,
     manifest,
+    policy,
     receipt,
     privateKey,
     rewriteManifest() {
@@ -579,6 +723,59 @@ test("rejects an authority receipt issued before its latest prerequisite", () =>
   );
 });
 
+test("rejects missing or rewritten Project B and Project A deployment readbacks", () => {
+  expectCode(
+    makeFixture(),
+    "production_projectB_deployment_receipt_missing",
+    (fixture) => {
+      fixture.input.projectBDeploymentReceiptPath = "";
+    },
+  );
+  expectCode(
+    makeFixture(),
+    "production_projectA_deployment_receipt_invalid",
+    (fixture) => {
+      fixture.manifest.expectedDeployments.projectA.candidateDeploymentId =
+        "rewritten-a-candidate";
+      fixture.rewriteManifest();
+    },
+  );
+});
+
+test("rejects deployment evidence that is not strictly GO then Project B then Project A", () => {
+  expectCode(
+    makeFixture({
+      projectBDeploymentIssuedAt: "2026-09-10T23:46:00.000Z",
+      projectADeploymentIssuedAt: "2026-09-10T23:45:00.000Z",
+    }),
+    "production_projectA_deployment_stale_or_out_of_order",
+  );
+});
+
+test("rejects edge deployment authority issued before the Project A readback", () => {
+  expectCode(
+    makeFixture({
+      projectADeploymentIssuedAt: "2026-09-10T23:45:00.000Z",
+      edgeDeploymentAuthorityIssuedAt: "2026-09-10T23:44:00.000Z",
+    }),
+    "edge_deployment_authority_stale_or_out_of_order",
+  );
+});
+
+test("rejects a deployment receipt whose signing key lacks the provider scope", () => {
+  expectCode(
+    makeFixture(),
+    "production_projectB_deployment_issuer_untrusted_or_out_of_scope",
+    (fixture) => {
+      fixture.policy.trustedIssuers[0].allowedReceiptTypes = ["approval"];
+      writeJson(fixture.paths.policy, fixture.policy);
+      fixture.input.expectedTrustPolicySha256 = sha256(
+        readFileSync(fixture.paths.policy),
+      );
+    },
+  );
+});
+
 test("rejects a stale authority receipt", () => {
   expectCode(
     makeFixture({
@@ -628,6 +825,12 @@ test("workflow deploys the hash-attested Worker only after authority and credent
   assert.match(workflow, /release_manifest_asset_id:/);
   assert.match(workflow, /release_authority_receipt_asset_id:/);
   assert.match(workflow, /release_authority_signature_asset_id:/);
+  assert.match(workflow, /project_b_deployment_receipt_asset_id:/);
+  assert.match(workflow, /project_a_deployment_receipt_asset_id:/);
+  assert.match(workflow, /edge_deployment_authority_receipt_asset_id:/);
+  assert.match(workflow, /--project-b-deployment-receipt/);
+  assert.match(workflow, /--project-a-deployment-receipt/);
+  assert.match(workflow, /--edge-deployment-authority-receipt/);
   const verifyIndex = workflow.indexOf("node verify-release-authority.mjs");
   const buildIndex = workflow.lastIndexOf(
     "--outfile=dist/worker.mjs",
