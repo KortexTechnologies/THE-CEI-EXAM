@@ -60,10 +60,10 @@ jobs:
         working-directory: cloudflare-edge
     steps:
       - name: Check out proposed source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -98,10 +98,10 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
     steps:
       - name: Check out verified release source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
