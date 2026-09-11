@@ -1,0 +1,20 @@
+{
+  "name": "@kortex-technologies/the-cei-exam-edge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "test:authority": "node --test verify-release-authority.test.mjs",
+    "build": "esbuild worker/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.mjs",
+    "attest:production": "node write-release-build-metadata.mjs --production",
+    "verify:production": "node write-release-build-metadata.mjs --verify-production && node verify.mjs",
+    "deploy:production": "wrangler deploy --no-bundle --env production"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "wrangler": "4.123.0"
+  }
+}

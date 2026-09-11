@@ -1,0 +1,65 @@
+{
+  "marker": "CEI_EDGE_RELEASE_AUTHORITY_TRUST_POLICY",
+  "schemaVersion": 1,
+  "expectedRepositoryUrl": "https://github.com/KortexTechnologies/THE-CEI-EXAM.git",
+  "maximumManifestAgeHours": 24,
+  "maximumReleaseAuthorityAgeHours": 24,
+  "maximumProductionDeploymentReceiptAgeHours": 24,
+  "maximumEdgeDeploymentAuthorityAgeHours": 4,
+  "maximumFutureSkewMinutes": 5,
+  "releaseAuthority": {
+    "receiptType": "approval",
+    "phase": "go",
+    "subject": "release_authority"
+  },
+  "productionDeployments": [
+    {
+      "receiptType": "provider",
+      "phase": "deploy",
+      "subject": "project_b_production_deployment",
+      "role": "projectB"
+    },
+    {
+      "receiptType": "provider",
+      "phase": "deploy",
+      "subject": "project_a_production_deployment",
+      "role": "projectA"
+    }
+  ],
+  "edgeDeploymentAuthority": {
+    "receiptType": "approval",
+    "phase": "deploy",
+    "subject": "edge_deployment_authority"
+  },
+  "requiredGoReceipts": [
+    { "receiptType": "evidence", "phase": "go", "subject": "local_release" },
+    { "receiptType": "evidence", "phase": "go", "subject": "connected_qa" },
+    { "receiptType": "security", "phase": "go", "subject": "security_diff" },
+    { "receiptType": "security", "phase": "go", "subject": "content_boundary" },
+    { "receiptType": "provider", "phase": "go", "subject": "github_project_a" },
+    { "receiptType": "provider", "phase": "go", "subject": "github_project_b" },
+    { "receiptType": "provider", "phase": "go", "subject": "github_edge" },
+    {
+      "receiptType": "provider",
+      "phase": "go",
+      "subject": "supabase_project_a"
+    },
+    {
+      "receiptType": "provider",
+      "phase": "go",
+      "subject": "supabase_project_b"
+    },
+    { "receiptType": "provider", "phase": "go", "subject": "stripe" },
+    { "receiptType": "provider", "phase": "go", "subject": "cookiebot" },
+    { "receiptType": "provider", "phase": "go", "subject": "cloudflare_edge" },
+    { "receiptType": "approval", "phase": "go", "subject": "product_owner" },
+    { "receiptType": "approval", "phase": "go", "subject": "dpo" },
+    { "receiptType": "approval", "phase": "go", "subject": "singapore_legal" },
+    {
+      "receiptType": "approval",
+      "phase": "go",
+      "subject": "engineering_security"
+    }
+  ],
+  "trustedIssuers": []
+}

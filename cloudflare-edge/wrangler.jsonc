@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "theceiexam-edge",
-  "main": "worker/index.ts",
+  "main": "dist/worker.mjs",
   "compatibility_date": "2026-08-17",
   "observability": {
     "enabled": true
@@ -23,7 +23,9 @@
       "vars": {},
       "routes": [
         { "pattern": "theceiexam.com/*", "zone_name": "theceiexam.com" },
-        { "pattern": "www.theceiexam.com/*", "zone_name": "theceiexam.com" }
+        { "pattern": "www.theceiexam.com/*", "zone_name": "theceiexam.com" },
+        { "pattern": "dashboard.theceiexam.com/*", "zone_name": "theceiexam.com" },
+        { "pattern": "www.dashboard.theceiexam.com/*", "zone_name": "theceiexam.com" }
       ]
     }
   }

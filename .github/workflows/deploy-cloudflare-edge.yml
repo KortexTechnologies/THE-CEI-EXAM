@@ -1,6 +1,10 @@
-name: Deploy Cloudflare edge
+name: Verify and deploy Cloudflare edge
 
 on:
+  pull_request:
+    paths:
+      - "cloudflare-edge/**"
+      - ".github/workflows/deploy-cloudflare-edge.yml"
   push:
     branches:
       - main
@@ -8,36 +12,223 @@ on:
       - "cloudflare-edge/**"
       - ".github/workflows/deploy-cloudflare-edge.yml"
   workflow_dispatch:
+    inputs:
+      release_id:
+        description: "Approved immutable release-manifest ID"
+        required: true
+        type: string
+      release_manifest_sha256:
+        description: "SHA-256 of the approved release manifest"
+        required: true
+        type: string
+      release_manifest_asset_id:
+        description: "GitHub release asset ID containing the approved manifest bytes"
+        required: true
+        type: string
+      release_authority_receipt_asset_id:
+        description: "GitHub release asset ID containing the detached GO authority receipt"
+        required: true
+        type: string
+      release_authority_signature_asset_id:
+        description: "GitHub release asset ID containing the receipt's detached Ed25519 signature"
+        required: true
+        type: string
+      project_b_deployment_receipt_asset_id:
+        description: "Signed Project B production deployment readback receipt asset ID"
+        required: true
+        type: string
+      project_b_deployment_signature_asset_id:
+        description: "Detached Project B production deployment receipt signature asset ID"
+        required: true
+        type: string
+      project_a_deployment_receipt_asset_id:
+        description: "Signed Project A production deployment readback receipt asset ID"
+        required: true
+        type: string
+      project_a_deployment_signature_asset_id:
+        description: "Detached Project A production deployment receipt signature asset ID"
+        required: true
+        type: string
+      edge_deployment_authority_receipt_asset_id:
+        description: "Post-A/B edge deployment authority receipt asset ID"
+        required: true
+        type: string
+      edge_deployment_authority_signature_asset_id:
+        description: "Detached edge deployment authority signature asset ID"
+        required: true
+        type: string
+      candidate_commit_sha:
+        description: "Approved edge commit SHA (must equal the dispatched revision)"
+        required: true
+        type: string
+      production_deployment_approved:
+        description: "Action-time approval to deploy production edge routes"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: theceiexam-production-edge
+  group: theceiexam-edge-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Verify and deploy production Worker
+  verify:
+    name: Verify Cloudflare edge
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
         working-directory: cloudflare-edge
-    env:
-      CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
-
     steps:
-      - name: Check out release source
-        uses: actions/checkout@v4
+      - name: Check out proposed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Use Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare-edge/package-lock.json
+
+      - name: Install locked edge toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Test release-authority fail-closed controls
+        run: npm run test:authority
+
+      - name: Build Worker from canonical TypeScript source
+        run: npm run build
+
+      - name: Attest candidate-bound production build
+        run: node write-release-build-metadata.mjs --production
 
       - name: Verify edge behaviour
-        run: node verify.mjs
+        run: npm run verify:production
+
+  deploy:
+    name: Deploy production Worker
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.production_deployment_approved == true
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    defaults:
+      run:
+        working-directory: cloudflare-edge
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 1b77e983b9da655eb6ee11e304b9dcaa
+    steps:
+      - name: Check out verified release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare-edge/package-lock.json
+
+      - name: Install locked edge toolchain
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Download immutable release-authority assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_ASSET_ID: ${{ inputs.release_manifest_asset_id }}
+          AUTHORITY_RECEIPT_ASSET_ID: ${{ inputs.release_authority_receipt_asset_id }}
+          AUTHORITY_SIGNATURE_ASSET_ID: ${{ inputs.release_authority_signature_asset_id }}
+          PROJECT_B_DEPLOYMENT_RECEIPT_ASSET_ID: ${{ inputs.project_b_deployment_receipt_asset_id }}
+          PROJECT_B_DEPLOYMENT_SIGNATURE_ASSET_ID: ${{ inputs.project_b_deployment_signature_asset_id }}
+          PROJECT_A_DEPLOYMENT_RECEIPT_ASSET_ID: ${{ inputs.project_a_deployment_receipt_asset_id }}
+          PROJECT_A_DEPLOYMENT_SIGNATURE_ASSET_ID: ${{ inputs.project_a_deployment_signature_asset_id }}
+          EDGE_DEPLOYMENT_AUTHORITY_RECEIPT_ASSET_ID: ${{ inputs.edge_deployment_authority_receipt_asset_id }}
+          EDGE_DEPLOYMENT_AUTHORITY_SIGNATURE_ASSET_ID: ${{ inputs.edge_deployment_authority_signature_asset_id }}
+        run: |
+          set -euo pipefail
+          for asset_id in \
+            "$MANIFEST_ASSET_ID" \
+            "$AUTHORITY_RECEIPT_ASSET_ID" \
+            "$AUTHORITY_SIGNATURE_ASSET_ID" \
+            "$PROJECT_B_DEPLOYMENT_RECEIPT_ASSET_ID" \
+            "$PROJECT_B_DEPLOYMENT_SIGNATURE_ASSET_ID" \
+            "$PROJECT_A_DEPLOYMENT_RECEIPT_ASSET_ID" \
+            "$PROJECT_A_DEPLOYMENT_SIGNATURE_ASSET_ID" \
+            "$EDGE_DEPLOYMENT_AUTHORITY_RECEIPT_ASSET_ID" \
+            "$EDGE_DEPLOYMENT_AUTHORITY_SIGNATURE_ASSET_ID"; do
+            if ! printf '%s' "$asset_id" | grep -Eq '^[1-9][0-9]{0,19}$'; then
+              echo 'Release-authority asset ID is invalid' >&2
+              exit 1
+            fi
+          done
+          evidence_dir="$RUNNER_TEMP/cei-release-authority"
+          mkdir -p "$evidence_dir"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$MANIFEST_ASSET_ID" \
+            > "$evidence_dir/release-manifest.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$AUTHORITY_RECEIPT_ASSET_ID" \
+            > "$evidence_dir/release-authority-receipt.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$AUTHORITY_SIGNATURE_ASSET_ID" \
+            > "$evidence_dir/release-authority-receipt.sig"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$PROJECT_B_DEPLOYMENT_RECEIPT_ASSET_ID" \
+            > "$evidence_dir/project-b-deployment-receipt.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$PROJECT_B_DEPLOYMENT_SIGNATURE_ASSET_ID" \
+            > "$evidence_dir/project-b-deployment-receipt.sig"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$PROJECT_A_DEPLOYMENT_RECEIPT_ASSET_ID" \
+            > "$evidence_dir/project-a-deployment-receipt.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$PROJECT_A_DEPLOYMENT_SIGNATURE_ASSET_ID" \
+            > "$evidence_dir/project-a-deployment-receipt.sig"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$EDGE_DEPLOYMENT_AUTHORITY_RECEIPT_ASSET_ID" \
+            > "$evidence_dir/edge-deployment-authority-receipt.json"
+          gh api -H 'Accept: application/octet-stream' \
+            "/repos/$GITHUB_REPOSITORY/releases/assets/$EDGE_DEPLOYMENT_AUTHORITY_SIGNATURE_ASSET_ID" \
+            > "$evidence_dir/edge-deployment-authority-receipt.sig"
+
+      - name: Validate exact manifest and detached GO authority
+        env:
+          APPROVED_RELEASE_ID: ${{ inputs.release_id }}
+          APPROVED_MANIFEST_SHA256: ${{ inputs.release_manifest_sha256 }}
+          APPROVED_CANDIDATE_SHA: ${{ inputs.candidate_commit_sha }}
+          EXPECTED_TRUST_POLICY_SHA256: ${{ vars.CEI_RELEASE_AUTHORITY_TRUST_POLICY_SHA256 }}
+        run: >-
+          node verify-release-authority.mjs
+          --manifest "${{ runner.temp }}/cei-release-authority/release-manifest.json"
+          --manifest-sha256 "$APPROVED_MANIFEST_SHA256"
+          --release-id "$APPROVED_RELEASE_ID"
+          --authority-receipt "${{ runner.temp }}/cei-release-authority/release-authority-receipt.json"
+          --authority-signature "${{ runner.temp }}/cei-release-authority/release-authority-receipt.sig"
+          --project-b-deployment-receipt "${{ runner.temp }}/cei-release-authority/project-b-deployment-receipt.json"
+          --project-b-deployment-signature "${{ runner.temp }}/cei-release-authority/project-b-deployment-receipt.sig"
+          --project-a-deployment-receipt "${{ runner.temp }}/cei-release-authority/project-a-deployment-receipt.json"
+          --project-a-deployment-signature "${{ runner.temp }}/cei-release-authority/project-a-deployment-receipt.sig"
+          --edge-deployment-authority-receipt "${{ runner.temp }}/cei-release-authority/edge-deployment-authority-receipt.json"
+          --edge-deployment-authority-signature "${{ runner.temp }}/cei-release-authority/edge-deployment-authority-receipt.sig"
+          --trust-policy "release-authority-trust.json"
+          --expected-trust-policy-sha256 "$EXPECTED_TRUST_POLICY_SHA256"
+          --candidate-sha "$GITHUB_SHA"
+          --dispatched-candidate-sha "$APPROVED_CANDIDATE_SHA"
+          --github-event-name "$GITHUB_EVENT_NAME"
+          --github-ref "$GITHUB_REF"
+          --production-deployment-approved "${{ inputs.production_deployment_approved }}"
+
+      - name: Rebuild and attest approved edge candidate
+        run: |
+          npm run build
+          npm run attest:production
+          npm run verify:production
 
       - name: Resolve an existing scoped Cloudflare token
         env:
@@ -61,4 +252,4 @@ jobs:
           fi
 
       - name: Deploy production Worker and routes
-        run: npx --yes wrangler@4.123.0 deploy --env production
+        run: npm run deploy:production
